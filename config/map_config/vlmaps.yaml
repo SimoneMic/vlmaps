@@ -7,10 +7,11 @@ pose_info:
   base_forward_axis: [0, 0, -1]
   base_left_axis: [-1, 0, 0]
   base_up_axis: [0, 1, 0]
-cam_calib_mat: [540, 0, 540, 0, 540, 360, 0, 0, 1]
+#cam_calib_mat: [540, 0, 540, 0, 540, 360, 0, 0, 1]
+cam_calib_mat: [386, 0, 386, 0, 321, 238, 0, 0, 1]
 grid_size: ${params.gs}
 cell_size: ${params.cs}
-depth_sample_rate: 100
+depth_sample_rate: 30   #100
 dilate_iter: 3
 gaussian_sigma: 1.0
 customize_obstacle_map: False

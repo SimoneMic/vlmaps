@@ -27,12 +27,12 @@ from vlmaps.utils.visualize_utils import pool_3d_label_to_2d
 #     mp3dcat,
 #     segment_lseg_map,
 # )
-from vlmaps.map.vlmap_builder import VLMapBuilder
+from vlmaps.map.vlmap_builder import VLMapBuilder, VLMapBuilderROS
 from vlmaps.utils.mapping_utils import load_3d_map
 from vlmaps.map.map import Map
 from vlmaps.utils.index_utils import find_similar_category_id, get_segment_islands_pos, get_dynamic_obstacles_map_3d
 from vlmaps.utils.clip_utils import get_lseg_score
-
+import rclpy
 
 class VLMap(Map):
     def __init__(self, map_config: DictConfig, data_dir: str = ""):
@@ -59,6 +59,27 @@ class VLMap(Map):
         # self.load_categories()
         # print("a VLMap is created")
         # pass
+    
+    def create_map_ros(self, data_dir: Union[Path, str]) -> None:
+        print(f"Creating map from ROS, from config at: ", data_dir)
+        self._setup_paths(data_dir)
+
+        rclpy.init()
+        print("Creating VLMapBuilderROS")
+        self.map_builder = VLMapBuilderROS(
+            self.data_dir,
+            self.map_config
+        )
+        #if self.map_config.pose_info.pose_type == "mobile_base":
+        #    self.map_builder.create_mobile_base_map()
+
+        print("Spinning Node")
+        rclpy.spin(self.map_builder)
+        # Destroy the node explicitly
+        print("Shutting down ros node")
+        self.map_builder.destroy_node()
+        rclpy.shutdown()
+
 
     def create_map(self, data_dir: Union[Path, str]) -> None:
         print(f"Creating map for scene at: ", data_dir)
