@@ -23,7 +23,7 @@ import torch
 #     mp3dcat,
 #     segment_lseg_map,
 # )
-from vlmaps.map.vlmap_builder import VLMapBuilder, VLMapBuilderROS
+from vlmaps.map.vlmap_builder import VLMapBuilderROS
 from vlmaps.utils.mapping_utils import load_3d_map
 from vlmaps.map.map import Map
 from vlmaps.utils.index_utils import find_similar_category_id, get_dynamic_obstacles_map_3d

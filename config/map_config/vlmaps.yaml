@@ -4,9 +4,9 @@ pose_info:
   camera_height: 1.5
   # if pose_type is camera, the following parameters are ignored
   base2cam_rot: [1, 0, 0, 0, -1, 0, 0, 0, -1]
-  base_forward_axis: [0, 0, -1]
-  base_left_axis: [-1, 0, 0]
-  base_up_axis: [0, 1, 0]
+  base_forward_axis: [1, 0, 0]
+  base_left_axis: [0, 1, 0]
+  base_up_axis: [0, 0, 1]
 #cam_calib_mat: [540, 0, 540, 0, 540, 360, 0, 0, 1]
 cam_calib_mat: [386, 0, 386, 0, 321, 238, 0, 0, 1]
 grid_size: ${params.gs}
