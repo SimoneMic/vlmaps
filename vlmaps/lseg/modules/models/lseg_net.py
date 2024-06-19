@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from .lseg_blocks import FeatureFusionBlock, Interpolate, _make_encoder, FeatureFusionBlock_custom, forward_vit
 import clip
 import numpy as np
-import pandas as pd
+#import pandas as pd
 import os
 
 class depthwise_clipseg_conv(nn.Module):

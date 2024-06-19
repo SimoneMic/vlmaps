@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Tuple, Union
 import cv2
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
-from scipy.ndimage import binary_dilation, binary_erosion, gaussian_filter, median_filter
+#from scipy.ndimage import binary_dilation, binary_erosion, gaussian_filter, median_filter
 from shapely.geometry import Point, Polygon
 
 from vlmaps.utils.navigation_utils import get_dist_to_bbox_2d
@@ -163,19 +163,19 @@ class Map:
         rgb_map = self.generate_rgb_topdown_map()
         return rgb_map[self.rmin : self.rmax, self.cmin : self.cmax]
 
-    @staticmethod
-    def _dilate_map(binary_map: np.ndarray, dilate_iter: int = 0, gaussian_sigma: float = 1.0):
-        h, w = binary_map.shape
-        binary_map = cv2.resize(binary_map.astype(float), (w * 2, h * 2))
-        binary_map = gaussian_filter((binary_map).astype(float), sigma=gaussian_sigma, truncate=3)
-        binary_map = (binary_map > 0.5).astype(np.uint8)
-        binary_map = binary_dilation(
-            binary_map,
-            structure=np.ones((3, 3)),
-            iterations=dilate_iter * 2,
-        )
-        binary_map = cv2.resize(binary_map.astype(float), (w, h))
-        return binary_map
+    #@staticmethod
+    #def _dilate_map(binary_map: np.ndarray, dilate_iter: int = 0, gaussian_sigma: float = 1.0):
+    #    h, w = binary_map.shape
+    #    binary_map = cv2.resize(binary_map.astype(float), (w * 2, h * 2))
+    #    binary_map = gaussian_filter((binary_map).astype(float), sigma=gaussian_sigma, truncate=3)
+    #    binary_map = (binary_map > 0.5).astype(np.uint8)
+    #    binary_map = binary_dilation(
+    #        binary_map,
+    #        structure=np.ones((3, 3)),
+    #        iterations=dilate_iter * 2,
+    #    )
+    #    binary_map = cv2.resize(binary_map.astype(float), (w, h))
+    #    return binary_map
 
     def get_nearest_pos(self, curr_pos: List[float], name: str) -> List[float]:
         contours, centers, bbox_list = self.get_pos(name)

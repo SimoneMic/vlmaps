@@ -1,8 +1,8 @@
 import numpy as np
 import cv2
-from scipy.spatial.distance import cdist
+#from scipy.spatial.distance import cdist
 import pyvisgraph as vg
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 from PIL import Image
 from typing import Tuple, List, Dict
 

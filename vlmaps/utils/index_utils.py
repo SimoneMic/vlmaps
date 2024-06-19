@@ -1,7 +1,6 @@
 import os
 import cv2
 import numpy as np
-import openai
 from vlmaps.utils.clip_utils import get_text_feats, multiple_templates
 
 

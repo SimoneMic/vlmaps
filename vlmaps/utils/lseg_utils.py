@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import torch
 
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
 
 from vlmaps.utils.mapping_utils import *
 
@@ -97,18 +97,18 @@ def get_lseg_feat(
     outputs = outputs.numpy()  # B, D, H, W
     predicts = [torch.max(logit, 0)[1].cpu().numpy() for logit in logits_outputs]
     pred = predicts[0]
-    if vis:
-        new_palette = get_new_pallete(len(labels))
-        mask, patches = get_new_mask_pallete(pred, new_palette, out_label_flag=True, labels=labels)
-        seg = mask.convert("RGBA")
-        cv2.imshow("image", vis_image[:, :, [2, 1, 0]])
-        cv2.waitKey()
-        fig = plt.figure()
-        plt.imshow(seg)
-        plt.legend(handles=patches, loc="upper left", bbox_to_anchor=(1.0, 1), prop={"size": 20})
-        plt.axis("off")
-
-        plt.tight_layout()
-        plt.show()
+    #if vis:
+    #    new_palette = get_new_pallete(len(labels))
+    #    mask, patches = get_new_mask_pallete(pred, new_palette, out_label_flag=True, labels=labels)
+    #    seg = mask.convert("RGBA")
+    #    cv2.imshow("image", vis_image[:, :, [2, 1, 0]])
+    #    cv2.waitKey()
+    #    fig = plt.figure()
+    #    plt.imshow(seg)
+    #    plt.legend(handles=patches, loc="upper left", bbox_to_anchor=(1.0, 1), prop={"size": 20})
+    #    plt.axis("off")
+#
+    #    plt.tight_layout()
+    #    plt.show()
 
     return outputs

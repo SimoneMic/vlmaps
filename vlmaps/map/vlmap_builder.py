@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union, Set
+from typing import Any, Dict, List, Tuple, Set
 
 from tqdm import tqdm
 import cv2
@@ -9,7 +9,7 @@ import numpy as np
 from omegaconf import DictConfig
 import torch
 import gdown
-import open3d as o3d
+#import open3d as o3d
 from cv_bridge import CvBridge
 
 from vlmaps.utils.lseg_utils import get_lseg_feat
@@ -38,10 +38,10 @@ import rclpy
 import math
 #from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 
-def visualize_pc(pc: np.ndarray):
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pc)
-    o3d.visualization.draw_geometries([pcd])
+#def visualize_pc(pc: np.ndarray):
+#    pcd = o3d.geometry.PointCloud()
+#    pcd.points = o3d.utility.Vector3dVector(pc)
+#    o3d.visualization.draw_geometries([pcd])
 
 def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
     """Return homogeneous rotation matrix from quaternion.
@@ -71,11 +71,10 @@ def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry
 class VLMapBuilderROS(Node):
     def __init__(
         self,
-        data_dir: Path,
+        #data_dir: Path,
         map_config: DictConfig
     ):
         super().__init__('VLMap_builder_node')
-        self.data_dir = data_dir
         self.map_config = map_config
 
         # tf buffer init
@@ -95,9 +94,9 @@ class VLMapBuilderROS(Node):
         self.gs = self.map_config.grid_size
         self.depth_sample_rate = self.map_config.depth_sample_rate
 
-        self.map_save_dir = self.data_dir / "vlmap"
+        self.map_save_dir = "/home/ergocub"
         os.makedirs(self.map_save_dir, exist_ok=True)
-        self.map_save_path = self.map_save_dir / "vlmaps.h5df"
+        self.map_save_path = self.map_save_dir + "/" + "vlmaps.h5df"
 
         # init lseg model
         self.lseg_model, self.lseg_transform, self.crop_size, self.base_size, self.norm_mean, self.norm_std = self._init_lseg()
@@ -163,13 +162,13 @@ class VLMapBuilderROS(Node):
 
         #### Transform PC to map frame - i.e. global frame
         target_frame="map"
-        source_frame="realsense"
+        source_frame="head_link"
         try:
             transform = self.tf_buffer.lookup_transform(
                     target_frame,
                     source_frame,
-                    img_msg.header.stamp,
-                    rclpy.duration.Duration(seconds=0.1))  #rclpy.time.Time()
+                    img_msg.header.stamp
+                    )  #rclpy.time.Time() rclpy.duration.Duration(seconds=0.1)
         except TransformException as ex:
                 self.get_logger().info(
                         f'Could not transform {source_frame} to {target_frame}: {ex}')
