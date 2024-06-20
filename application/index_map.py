@@ -22,10 +22,12 @@ from vlmaps.utils.visualize_utils import (
     config_name="map_indexing_cfg.yaml",
 )
 def main(config: DictConfig) -> None:
-    data_dir = Path(config.data_paths.vlmaps_data_dir) / "vlmaps_dataset"
-    data_dirs = sorted([x for x in data_dir.iterdir() if x.is_dir()])
+    #data_dir = Path(config.data_paths.vlmaps_data_dir) / "vlmaps_dataset"
+    #data_dirs = sorted([x for x in data_dir.iterdir() if x.is_dir()])
+    data_dirs = "~/vlmaps"
     vlmap = VLMap(config.map_config, data_dir=data_dirs[config.scene_id])
-    vlmap.load_map(data_dirs[config.scene_id])
+    #vlmap.load_map(data_dirs[config.scene_id])
+    vlmap.load_map("/home/ergocub")
     visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb)
     cat = input("What is your interested category in this scene?")
     # cat = "chair"

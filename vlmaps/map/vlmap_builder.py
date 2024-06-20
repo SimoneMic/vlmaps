@@ -181,7 +181,6 @@ class VLMapBuilderROS(Node):
         o3d.visualization.draw_geometries_with_vertex_selection([pcd])
         #### Transform the pc
         #pc_global = transform_pc(pc, transform_np)  # (3, N)
-        #pcd_global = o3d.geometry.PointCloud()
         #print(transform_np)
         pcd_global = pcd.transform(transform_np)
         o3d.visualization.draw_geometries_with_vertex_selection([pcd])
@@ -190,13 +189,14 @@ class VLMapBuilderROS(Node):
         
         self.get_logger().info('Evaluation of each point in the PC and projection into map with')
         # Evaluation Loop of each point in 3d
-        for i, (p, p_local) in enumerate(zip(pc_global.T, pc.T)):
-            #self.get_logger().info(f'loop number {i}')
-            row, col, height = base_pos2grid_id_3d(self.gs, self.cs, p[0], p[1], p[2])
+        for i, (p_global, p_local) in enumerate(zip(pc_global.T, pc.T)):
+            # p_global is a point XYZ of the PC in the global frame
+            row, col, height = base_pos2grid_id_3d(self.gs, self.cs, p_global[0], p_global[1], p_global[2])
             if self._out_of_range(row, col, height, self.gs, self.vh):
-                self.get_logger().info(f"out of range with p0 {p[0]} p1 {p[1]} p2 {p[2]}")
+                #self.get_logger().info(f"out of range with p0 {p[0]} p1 {p[1]} p2 {p[2]}")
                 continue
             
+            # Why project the point into the image?
             px, py, pz = project_point(self.calib_mat, p_local)
             rgb_v = rgb[py, px, :]
             px, py, pz = project_point(pix_feats_intr, p_local)
@@ -338,8 +338,7 @@ class VLMapBuilderROS(Node):
         return pc
 
     def _out_of_range(self, row: int, col: int, height: int, gs: int, vh: int) -> bool:
-        #return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0
-        return col >= gs or row >= gs or col < 0 or row < 0 or height < 0
+        return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0
 
     def _reserve_map_space(
         self, grid_feat: np.ndarray, grid_pos: np.ndarray, weight: np.ndarray, grid_rgb: np.ndarray

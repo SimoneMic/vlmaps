@@ -95,7 +95,8 @@ class VLMap(Map):
 
     def load_map(self, data_dir: str) -> bool:
         self._setup_paths(data_dir)
-        self.map_save_path = Path(data_dir) / "vlmap" / "vlmaps.h5df"
+        self.map_save_path = Path(data_dir) / "vlmaps.h5df"
+        print(self.map_save_path)
         if not self.map_save_path.exists():
             print("Loading VLMap failed because the file doesn't exist.")
             return False

@@ -1,7 +1,7 @@
 map_type: "vlmap" # "vlmap", "gt", "clip", "clip_gradcam", "vlmaps_lseg_3d"
 pose_info:
   pose_type: mobile_base # mobile_base, camera
-  camera_height: 1.5
+  camera_height: 2.5
   # if pose_type is camera, the following parameters are ignored
   base2cam_rot: [1, 0, 0, 0, -1, 0, 0, 0, -1]
   base_forward_axis: [1, 0, 0]
