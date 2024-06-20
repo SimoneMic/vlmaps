@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Tuple, Union
 import clip
 import numpy as np
 from omegaconf import DictConfig
-#from scipy.ndimage import binary_closing, binary_dilation, gaussian_filter
+from scipy.ndimage import binary_closing, binary_dilation, gaussian_filter
 import torch
 
-#rom vlmaps.utils.clip_utils import get_text_feats_multiple_templates
-#rom vlmaps.utils.visualize_utils import pool_3d_label_to_2d
+from vlmaps.utils.clip_utils import get_text_feats_multiple_templates
+from vlmaps.utils.visualize_utils import pool_3d_label_to_2d    
 
 # from utils.ai2thor_constant import ai2thor_class_list
 # from utils.clip_mapping_utils import load_map
@@ -26,7 +26,7 @@ import torch
 from vlmaps.map.vlmap_builder import VLMapBuilderROS
 from vlmaps.utils.mapping_utils import load_3d_map
 from vlmaps.map.map import Map
-from vlmaps.utils.index_utils import find_similar_category_id, get_dynamic_obstacles_map_3d
+from vlmaps.utils.index_utils import find_similar_category_id, get_dynamic_obstacles_map_3d, get_segment_islands_pos
 from vlmaps.utils.clip_utils import get_lseg_score
 import rclpy
 
@@ -76,22 +76,22 @@ class VLMap(Map):
         rclpy.shutdown()
 
 
-    def create_map(self, data_dir: Union[Path, str]) -> None:
-        print(f"Creating map for scene at: ", data_dir)
-        self._setup_paths(data_dir)
-        self.map_builder = VLMapBuilder(
-            self.data_dir,
-            self.map_config,
-            self.pose_path,
-            self.rgb_paths,
-            self.depth_paths,
-            self.base2cam_tf,
-            self.base_transform,
-        )
-        if self.map_config.pose_info.pose_type == "mobile_base":
-            self.map_builder.create_mobile_base_map()
-        elif self.map_config.pose_info.pose_type == "camera":
-            self.map_builder.create_camera_map()
+    #def create_map(self, data_dir: Union[Path, str]) -> None:
+    #    print(f"Creating map for scene at: ", data_dir)
+    #    self._setup_paths(data_dir)
+    #    self.map_builder = VLMapBuilder(
+    #        self.data_dir,
+    #        self.map_config,
+    #        self.pose_path,
+    #        self.rgb_paths,
+    #        self.depth_paths,
+    #        self.base2cam_tf,
+    #        self.base_transform,
+    #    )
+    #    if self.map_config.pose_info.pose_type == "mobile_base":
+    #        self.map_builder.create_mobile_base_map()
+    #    elif self.map_config.pose_info.pose_type == "camera":
+    #        self.map_builder.create_camera_map()
 
     def load_map(self, data_dir: str) -> bool:
         self._setup_paths(data_dir)
@@ -248,45 +248,45 @@ class VLMap(Map):
     #     # labeled_map_cropped = self.labeled_map_cropped.copy()
     #     return self.scores_map[:, :, cat_id]
 
-    #def get_pos(self, name: str) -> Tuple[List[List[int]], List[List[float]], List[np.ndarray], Any]:
-    #    """
-    #    Get the contours, centers, and bbox list of a certain category
-    #    on a full map
-    #    """
-    #    assert self.categories
-    #    # cat_id = find_similar_category_id(name, self.categories)
-    #    # labeled_map_cropped = self.scores_mat.copy()  # (N, C) N: number of voxels, C: number of categories
-    #    # labeled_map_cropped = np.argmax(labeled_map_cropped, axis=1)  # (N,)
-    #    # pc_mask = labeled_map_cropped == cat_id # (N,)
-    #    # self.grid_pos[pc_mask]
-    #    pc_mask = self.index_map(name, with_init_cat=True)
-    #    mask_2d = pool_3d_label_to_2d(pc_mask, self.grid_pos, self.gs)
-    #    mask_2d = mask_2d[self.rmin : self.rmax + 1, self.cmin : self.cmax + 1]
-    #    # print(f"showing mask for object cat {name}")
-    #    # cv2.imshow(f"mask_{name}", (mask_2d.astype(np.float32) * 255).astype(np.uint8))
-    #    # cv2.waitKey()
-#
-    #    foreground = binary_closing(mask_2d, iterations=3)
-    #    foreground = gaussian_filter(foreground.astype(float), sigma=0.8, truncate=3)
-    #    foreground = foreground > 0.5
-    #    # cv2.imshow(f"mask_{name}_gaussian", (foreground * 255).astype(np.uint8))
-    #    foreground = binary_dilation(foreground)
-    #    # cv2.imshow(f"mask_{name}_processed", (foreground.astype(np.float32) * 255).astype(np.uint8))
-    #    # cv2.waitKey()
-#
-    #    contours, centers, bbox_list, _ = get_segment_islands_pos(foreground, 1)
-    #    # print("centers", centers)
-#
-    #    # whole map position
-    #    for i in range(len(contours)):
-    #        centers[i][0] += self.rmin
-    #        centers[i][1] += self.cmin
-    #        bbox_list[i][0] += self.rmin
-    #        bbox_list[i][1] += self.rmin
-    #        bbox_list[i][2] += self.cmin
-    #        bbox_list[i][3] += self.cmin
-    #        for j in range(len(contours[i])):
-    #            contours[i][j, 0] += self.rmin
-    #            contours[i][j, 1] += self.cmin
-#
-    #    return contours, centers, bbox_list
+    def get_pos(self, name: str) -> Tuple[List[List[int]], List[List[float]], List[np.ndarray], Any]:
+        """
+        Get the contours, centers, and bbox list of a certain category
+        on a full map
+        """
+        assert self.categories
+        # cat_id = find_similar_category_id(name, self.categories)
+        # labeled_map_cropped = self.scores_mat.copy()  # (N, C) N: number of voxels, C: number of categories
+        # labeled_map_cropped = np.argmax(labeled_map_cropped, axis=1)  # (N,)
+        # pc_mask = labeled_map_cropped == cat_id # (N,)
+        # self.grid_pos[pc_mask]
+        pc_mask = self.index_map(name, with_init_cat=True)
+        mask_2d = pool_3d_label_to_2d(pc_mask, self.grid_pos, self.gs)
+        mask_2d = mask_2d[self.rmin : self.rmax + 1, self.cmin : self.cmax + 1]
+        # print(f"showing mask for object cat {name}")
+        # cv2.imshow(f"mask_{name}", (mask_2d.astype(np.float32) * 255).astype(np.uint8))
+        # cv2.waitKey()
+
+        foreground = binary_closing(mask_2d, iterations=3)
+        foreground = gaussian_filter(foreground.astype(float), sigma=0.8, truncate=3)
+        foreground = foreground > 0.5
+        # cv2.imshow(f"mask_{name}_gaussian", (foreground * 255).astype(np.uint8))
+        foreground = binary_dilation(foreground)
+        # cv2.imshow(f"mask_{name}_processed", (foreground.astype(np.float32) * 255).astype(np.uint8))
+        # cv2.waitKey()
+
+        contours, centers, bbox_list, _ = get_segment_islands_pos(foreground, 1)
+        # print("centers", centers)
+
+        # whole map position
+        for i in range(len(contours)):
+            centers[i][0] += self.rmin
+            centers[i][1] += self.cmin
+            bbox_list[i][0] += self.rmin
+            bbox_list[i][1] += self.rmin
+            bbox_list[i][2] += self.cmin
+            bbox_list[i][3] += self.cmin
+            for j in range(len(contours[i])):
+                contours[i][j, 0] += self.rmin
+                contours[i][j, 1] += self.cmin
+
+        return contours, centers, bbox_list

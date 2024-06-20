@@ -9,8 +9,9 @@ import numpy as np
 from omegaconf import DictConfig
 import torch
 import gdown
-#import open3d as o3d
+import open3d as o3d
 from cv_bridge import CvBridge
+import open3d as o3d
 
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
@@ -154,7 +155,7 @@ class VLMapBuilderROS(Node):
 
         #### Transform PC to map frame - i.e. global frame
         target_frame="map"
-        source_frame="head_link"
+        source_frame="depth"
         try:
             transform = self.tf_buffer.lookup_transform(
                     target_frame,
@@ -174,8 +175,19 @@ class VLMapBuilderROS(Node):
         #### Let's get an SE(4) matrix form
         transform_np = quaternion_matrix(transform_quat_np)
         transform_np[0:3, -1] = transform_pose_np
-        #### Transform the pc using the default util
-        pc_global = transform_pc(pc, transform_np)  # (3, N)
+        #### Convert normal pc to open3d format 
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pc.T)
+        o3d.visualization.draw_geometries_with_vertex_selection([pcd])
+        #### Transform the pc
+        #pc_global = transform_pc(pc, transform_np)  # (3, N)
+        #pcd_global = o3d.geometry.PointCloud()
+        #print(transform_np)
+        pcd_global = pcd.transform(transform_np)
+        o3d.visualization.draw_geometries_with_vertex_selection([pcd])
+        #### Convert back to numpy
+        pc_global = np.asarray(pcd_global.points)
+        
         self.get_logger().info('Evaluation of each point in the PC and projection into map with')
         # Evaluation Loop of each point in 3d
         for i, (p, p_local) in enumerate(zip(pc_global.T, pc.T)):

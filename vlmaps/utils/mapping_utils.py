@@ -6,11 +6,11 @@ import cv2
 
 import torch
 
-#import matplotlib.patches as mpatches
+import matplotlib.patches as mpatches
 
 # function to display the topdown map
 from PIL import Image
-#from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R
 import h5py
 from typing import List, Dict, Tuple, Set, Union
 
@@ -278,28 +278,28 @@ def get_new_pallete(num_cls):
     return pallete
 
 
-#def get_new_mask_pallete(npimg, new_palette, out_label_flag=False, labels=None, ignore_ids_list=[]):
-#    """Get image color pallete for visualizing masks"""
-#    # put colormap
-#    out_img = Image.fromarray(npimg.squeeze().astype("uint8"))
-#    out_img.putpalette(new_palette)
-#
-#    if out_label_flag:
-#        assert labels is not None
-#        u_index = np.unique(npimg)
-#        patches = []
-#        for i, index in enumerate(u_index):
-#            if index in ignore_ids_list:
-#                continue
-#            label = labels[index]
-#            cur_color = [
-#                new_palette[index * 3] / 255.0,
-#                new_palette[index * 3 + 1] / 255.0,
-#                new_palette[index * 3 + 2] / 255.0,
-#            ]
-#            red_patch = mpatches.Patch(color=cur_color, label=label)
-#            patches.append(red_patch)
-#    return out_img, patches
+def get_new_mask_pallete(npimg, new_palette, out_label_flag=False, labels=None, ignore_ids_list=[]):
+    """Get image color pallete for visualizing masks"""
+    # put colormap
+    out_img = Image.fromarray(npimg.squeeze().astype("uint8"))
+    out_img.putpalette(new_palette)
+
+    if out_label_flag:
+        assert labels is not None
+        u_index = np.unique(npimg)
+        patches = []
+        for i, index in enumerate(u_index):
+            if index in ignore_ids_list:
+                continue
+            label = labels[index]
+            cur_color = [
+                new_palette[index * 3] / 255.0,
+                new_palette[index * 3 + 1] / 255.0,
+                new_palette[index * 3 + 2] / 255.0,
+            ]
+            red_patch = mpatches.Patch(color=cur_color, label=label)
+            patches.append(red_patch)
+    return out_img, patches
 
 
 def transform_pc(pc, pose):

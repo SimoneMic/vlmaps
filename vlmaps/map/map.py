@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Tuple, Union
 import cv2
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
-#from scipy.ndimage import binary_dilation, binary_erosion, gaussian_filter, median_filter
+from scipy.ndimage import binary_dilation, binary_erosion, gaussian_filter, median_filter
 from shapely.geometry import Point, Polygon
 
 from vlmaps.utils.navigation_utils import get_dist_to_bbox_2d
