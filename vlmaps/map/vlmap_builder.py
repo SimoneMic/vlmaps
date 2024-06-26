@@ -123,7 +123,44 @@ class VLMapBuilderROS(Node):
         self.cv_map = np.zeros((self.gs, self.gs, 3), dtype=np.uint8)
         self.height_map = -100 * np.ones((self.gs, self.gs), dtype=np.float32)
 
+        ### Make more explicit the calib intrinsics:
+        self.focal_lenght_x = self.calib_mat[0,0]       #fx
+        self.focal_lenght_y = self.calib_mat[1,1]       #fy
+        self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
+        self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
+
         #pbar = tqdm(zip(self.rgb_paths, self.depth_paths, self.base_poses), total=len(self.rgb_paths))
+
+    # Given a point in 3D space, compute the corresponding pixel coordinates in an image with no distortion or forward distortion coefficients produced by the same camera
+    def project_point_to_pixel(self, point_pc):
+
+        x = point_pc[0] / point_pc[2]   # x/z
+        y = point_pc[1] / point_pc[2]   # y/z
+        #### DISTORTION MODEL:
+        #### TODO add distortion
+
+        pixel = np.zeros(2)
+        pixel[0] = x * self.focal_lenght_x + self.principal_point_x
+        pixel[1] = y * self.focal_lenght_y + self.principal_point_y
+        return pixel
+    
+    # /* Given pixel coordinates and depth in an image with no distortion or inverse distortion coefficients, compute the corresponding point in 3D space relative to the same camera */
+    def project_pixel_to_point(self, depth : float, pixel):
+        
+        x = (pixel[0] - self.principal_point_x) / self.focal_lenght_x
+        y = (pixel[1] - self.principal_point_y) / self.focal_lenght_y
+
+        #### TODO Add distortion model
+
+        point = np.zeros(3)
+        point[0] = depth * x
+        point[1] = depth * y
+        point[2] = depth
+        return point
+    
+    def project_depth_features_pc(self, depth_img, features_per_pixels):
+        #### TODO
+        return
 
     def sensors_callback(self, img_msg, depth_msg):
         """
@@ -135,6 +172,7 @@ class VLMapBuilderROS(Node):
         #### Convert depth from ros2 to OpenCv
         depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, "passthrough")  # TODO check image color encoding
         depth = depth.astype(np.float16)
+        
         #### TODO should I normalize the depth?
         self.get_logger().info('Ros2 to CV2 conversion')
 
@@ -188,6 +226,15 @@ class VLMapBuilderROS(Node):
         pc_global = np.asarray(pcd_global.points)
         
         self.get_logger().info('Evaluation of each point in the PC and projection into map with')
+        iteration = 0
+        for point in pc_global:
+            row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
+
+            pixel = self.project_point_to_pixel(pc[iteration])
+            self.get_logger().info(f"projecting point x: {point[0]} y: {point[1]} z: {point[2]} to pixel: {pixel[0]} , {pixel[1]} at iteration {iteration}")
+            rgb_v = rgb[pixel[0], pixel[1], :]
+            iteration += 1
+
         # Evaluation Loop of each point in 3d
         for i, (p_global, p_local) in enumerate(zip(pc_global.T, pc.T)):
             # p_global is a point XYZ of the PC in the global frame
@@ -196,10 +243,12 @@ class VLMapBuilderROS(Node):
                 #self.get_logger().info(f"out of range with p0 {p[0]} p1 {p[1]} p2 {p[2]}")
                 continue
             
-            # Why project the point into the image?
+            # project the point of the clout to the rgb image
             px, py, pz = project_point(self.calib_mat, p_local)
             rgb_v = rgb[py, px, :]
-            px, py, pz = project_point(pix_feats_intr, p_local)
+            #px, py, pz = project_point(pix_feats_intr, p_local)
+
+
             
             if height > self.height_map[row, col]:
                 self.height_map[row, col] = height
