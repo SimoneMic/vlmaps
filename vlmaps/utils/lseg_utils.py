@@ -102,7 +102,7 @@ def get_lseg_feat(
         mask, patches = get_new_mask_pallete(pred, new_palette, out_label_flag=True, labels=labels)
         seg = mask.convert("RGBA")
         cv2.imshow("image", vis_image[:, :, [2, 1, 0]])
-        cv2.waitKey()
+        #cv2.waitKey()
         fig = plt.figure()
         plt.imshow(seg)
         plt.legend(handles=patches, loc="upper left", bbox_to_anchor=(1.0, 1), prop={"size": 20})
@@ -110,5 +110,6 @@ def get_lseg_feat(
 
         plt.tight_layout()
         plt.show()
+        cv2.waitKey()
 
     return outputs

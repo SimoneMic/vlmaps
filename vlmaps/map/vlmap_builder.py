@@ -68,6 +68,21 @@ def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry
         (                0.0,                 0.0,                 0.0, 1.0)
         ), dtype=np.float64)
 
+class FeturedPoint:
+    def __init__(self, point, embedding) -> None:
+        self.point_xyz = point
+        self.embedding = embedding
+class FeaturedPC:
+    def __init__(self, featured_points) -> None:
+        self.featured_points = featured_points
+        self.points_xyz = np.zeros([len(self.featured_points), 3])
+        self.embeddings = np.zeros([len(self.featured_points), 512])  # TODO parameterize embeddings size
+        i = 0
+        for featured_point in self.featured_points:
+            self.points_xyz[i] = featured_point.point_xyz
+            self.embeddings[i] = featured_point.embedding
+            i += 1
+
 #### ROS2 wrapper
 class VLMapBuilderROS(Node):
     def __init__(
@@ -163,9 +178,12 @@ class VLMapBuilderROS(Node):
         fy = self.focal_lenght_y
         cx = self.principal_point_x
         cy = self.principal_point_y
-
-        points = []
+        
+        #points = []
+        
         h, w = depth.shape
+        points = np.zeros([h*w , 3])
+        count = 0
         for u in range(0, h):
             for v in range(0, w):
                 z = depth[u, v]
@@ -173,16 +191,43 @@ class VLMapBuilderROS(Node):
                     z = z / depth_factor
                     x = ((v - cx) * z) / fx
                     y = ((u - cy) * z) / fy
-                    points.append([x, y, z])
-        points = np.array(points)
-        points.itemsize
+                    #points.append([x, y, z])   #avoid memory allocation each loop iter
+                    points[count] = [x, y, z]
+                    count += 1
+        np.resize(points, count)
+        #points = np.array(points)
         #Downsample
-        points=points[(np.random.randint(0, points.shape[0], np.round(len(points)/downsample_factor, 0).astype(int)) )]
+        points=points[(np.random.randint(0, points.shape[0], np.round(count/downsample_factor, 0).astype(int)) )]
         return points
 
-    def project_depth_features_pc(self, depth_img, features_per_pixels):
-        #### TODO
-        return
+    def project_depth_features_pc(self, depth, features_per_pixels, depth_factor=1., downsample_factor=10):
+        fx = self.focal_lenght_x
+        fy = self.focal_lenght_y
+        cx = self.principal_point_x
+        cy = self.principal_point_y
+        
+        #points = []
+        feature_points_ls = []
+        # randomly sample pixels from depth (should be more memory efficient)
+        uu, vv = np.where(depth[:,:]>=0)
+        coords = np.column_stack((uu, vv))  # pixel pairs vector
+        np.random.shuffle(coords)   # I have all the pixels randomly shuffled
+        # Let's take only the number of pixels scaled by the downsample factor:
+        # Since we have shuffled the coordinates, we take the first N items
+        downsampled_coords = coords[:np.round(len(coords)/downsample_factor, 0).astype(int)]
+        for item in downsampled_coords:
+            # TODO optimize iteration formulation
+            u = item[0]
+            v = item[1]
+            z = depth[u, v]
+            if (z > 0.2 and z<6.0): # filter depth based on Z TODO parameterize these thresholds
+                z = z / depth_factor
+                x = ((v - cx) * z) / fx
+                y = ((u - cy) * z) / fy
+                # TODO avoid memory re-allocation each loop iter
+                feature_points_ls.append(FeturedPoint([x, y, z],features_per_pixels[0, :, u, v]))
+
+        return FeaturedPC(feature_points_ls)
 
     def sensors_callback(self, img_msg, depth_msg):
         """
@@ -200,7 +245,7 @@ class VLMapBuilderROS(Node):
 
         # get pixel-aligned LSeg features
         pix_feats = get_lseg_feat(
-            self.lseg_model, rgb, ["example"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std
+            self.lseg_model, rgb, ["other", "screen", "table", "closet", "chair", "shelf", "door", "wall", "ceiling", "floor", "human"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, vis=False
         )
         self.get_logger().info('lseg features extracted')
 
@@ -231,10 +276,10 @@ class VLMapBuilderROS(Node):
         #### Convert normal pc to open3d format 
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(pc)
-        o3d.visualization.draw_geometries_with_vertex_selection([pcd])
+        #o3d.visualization.draw_geometries_with_vertex_selection([pcd])
         #### Transform the pc
         pcd_global = pcd.transform(transform_np)
-        o3d.visualization.draw_geometries_with_vertex_selection([pcd])
+        #o3d.visualization.draw_geometries_with_vertex_selection([pcd])
         #### Convert back to numpy
         pc_global = np.asarray(pcd_global.points)
 
@@ -244,6 +289,13 @@ class VLMapBuilderROS(Node):
         tmp = self.project_pc(rgb, pc, depth_factor=1.)
         cv2.imshow("projected_pc2rgb", tmp)
         cv2.waitKey(0)
+
+        tmp_feat = self.project_depth_features_pc(depth, pix_feats)
+        pcd_feat = o3d.geometry.PointCloud()
+        pcd_feat.points = o3d.utility.Vector3dVector(tmp_feat.points_xyz)
+        o3d.visualization.draw_geometries_with_vertex_selection([pcd_feat])
+        
+
         for point in pc_global:
             row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
 
@@ -347,7 +399,7 @@ class VLMapBuilderROS(Node):
 
     def _init_lseg(self):
         crop_size = 480  # 480
-        base_size = 520  # 520
+        base_size = 640  # 520
         if torch.cuda.is_available():
             self.device = "cuda"
         elif torch.backends.mps.is_available():
