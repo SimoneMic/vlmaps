@@ -12,6 +12,7 @@ import gdown
 import open3d as o3d
 from cv_bridge import CvBridge
 import open3d as o3d
+import time
 
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
@@ -174,6 +175,7 @@ class VLMapBuilderROS(Node):
 
     def from_depth_to_pc(self, depth, depth_factor=1., downsample_factor=10):
         #fx, fy, cx, cy = intrinsics
+        start = time.time()
         fx = self.focal_lenght_x
         fy = self.focal_lenght_y
         cx = self.principal_point_x
@@ -198,6 +200,8 @@ class VLMapBuilderROS(Node):
         #points = np.array(points)
         #Downsample
         points=points[(np.random.randint(0, points.shape[0], np.round(count/downsample_factor, 0).astype(int)) )]
+        time_diff = time.time() - start
+        self.get_logger().info(f"Time for executing from_depth_to_pc: {time_diff}")
         return points
 
     def project_depth_features_pc(self, depth, features_per_pixels, depth_factor=1., downsample_factor=10):
@@ -234,22 +238,8 @@ class VLMapBuilderROS(Node):
         build the 3D map centering at the first base frame
         """
         self.get_logger().info('sensors_callback')
-        #### Convert the rgb format from ros to OpenCv
-        rgb = self.cv_bridge.imgmsg_to_cv2(img_msg) # TODO check image color encoding
-        #### Convert depth from ros2 to OpenCv
-        depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, "passthrough")  # TODO check image color encoding
-        depth = depth.astype(np.float16)
-        
-        #### TODO should I normalize the depth?
-        self.get_logger().info('Ros2 to CV2 conversion')
-
-        # get pixel-aligned LSeg features
-        pix_feats = get_lseg_feat(
-            self.lseg_model, rgb, ["other", "screen", "table", "closet", "chair", "shelf", "door", "wall", "ceiling", "floor", "human"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, vis=False
-        )
-        self.get_logger().info('lseg features extracted')
-
-        #### Transform PC to map frame - i.e. global frame
+        #### TF check, first:
+        ## Transform PC to map frame - i.e. global frame
         target_frame="map"
         source_frame="depth"
         try:
@@ -264,47 +254,63 @@ class VLMapBuilderROS(Node):
                         f'Could not transform {source_frame} to {target_frame}: {ex}')
                 return
         self.get_logger().info('Transform available')
-        #### Convert tf2 transform to np array components
+        ## Convert tf2 transform to np array components
         transform_pose_np = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
         transform_quat_np = np.array([transform.transform.rotation.x, transform.transform.rotation.y,
                                         transform.transform.rotation.z, transform.transform.rotation.w])
-        #### Let's get an SE(4) matrix form
+        ## Let's get an SE(4) matrix form
         transform_np = quaternion_matrix(transform_quat_np)
         transform_np[0:3, -1] = transform_pose_np
-        pc = self.from_depth_to_pc(depth, depth_factor=1.)
-        self.get_logger().info('backprojected depth')
+        #### Convert Inputs formats:
+        ## Convert the rgb format from ros to OpenCv
+        rgb = self.cv_bridge.imgmsg_to_cv2(img_msg) # TODO check image color encoding
+        ## Convert depth from ros2 to OpenCv
+        depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, "passthrough")  # TODO check image color encoding
+        depth = depth.astype(np.float16)
+        self.get_logger().info('Ros2 to CV2 conversion')
+
+        #### Segment image and extract features
+        # get pixel-aligned LSeg features
+        pix_feats = get_lseg_feat(
+            self.lseg_model, rgb, ["other", "screen", "table", "closet", "chair", "shelf", "door", "wall", "ceiling", "floor", "human"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, vis=False
+        )
+        self.get_logger().info('lseg features extracted')
+
+        
+        #pc = self.from_depth_to_pc(depth, depth_factor=1.)
+        #self.get_logger().info('backprojected depth')
         #### Convert normal pc to open3d format 
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(pc)
+        #pcd = o3d.geometry.PointCloud()
+        #pcd.points = o3d.utility.Vector3dVector(pc)
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd])
         #### Transform the pc
-        pcd_global = pcd.transform(transform_np)
+        #pcd_global = pcd.transform(transform_np)
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd])
         #### Convert back to numpy
-        pc_global = np.asarray(pcd_global.points)
+        #pc_global = np.asarray(pcd_global.points)
 
-        self.get_logger().info('Evaluation of each point in the PC and projection into map with')
-        iteration = 0
         #### Debug
-        tmp = self.project_pc(rgb, pc, depth_factor=1.)
-        cv2.imshow("projected_pc2rgb", tmp)
-        cv2.waitKey(0)
+        #tmp = self.project_pc(rgb, pc, depth_factor=1.)
+        #cv2.imshow("projected_pc2rgb", tmp)
+        #cv2.waitKey(0)
 
-        tmp_feat = self.project_depth_features_pc(depth, pix_feats)
+        #### Formatted PC with aligned features to pixel
+        start = time.time()
+        featured_pc = self.project_depth_features_pc(depth, pix_feats)
+        time_diff = time.time() - start
+        self.get_logger().info(f"Time for executing project_depth_features_pc: {time_diff}")
+        # Visualization for debug and projecting PC to img
         pcd_feat = o3d.geometry.PointCloud()
-        pcd_feat.points = o3d.utility.Vector3dVector(tmp_feat.points_xyz)
+        pcd_feat.points = o3d.utility.Vector3dVector(featured_pc.points_xyz)
         o3d.visualization.draw_geometries_with_vertex_selection([pcd_feat])
         
+        projection = self.project_pc(rgb, featured_pc.points_xyz, depth_factor=1.)
+        cv2.imshow("projected_featuredPC", projection)
+        cv2.waitKey(0)
 
-        for point in pc_global:
-            row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
+        return
 
-            pixel = self.project_point_to_pixel(pc[iteration])
-            
-            self.get_logger().info(f"projecting point x: {point[0]} y: {point[1]} z: {point[2]} to pixel: {pixel[0]} , {pixel[1]} at iteration {iteration}")
-            #rgb_v = rgb[pixel[0], pixel[1], :]
-            iteration += 1
-
+        #### TODO for memory efficency, we should launch a separate job for mapping registration
         # Evaluation Loop of each point in 3d
         for i, (p_global, p_local) in enumerate(zip(pc_global.T, pc.T)):
             # p_global is a point XYZ of the PC in the global frame
