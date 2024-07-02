@@ -39,10 +39,10 @@ import rclpy
 import math
 #from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 
-#def visualize_pc(pc: np.ndarray):
-#    pcd = o3d.geometry.PointCloud()
-#    pcd.points = o3d.utility.Vector3dVector(pc)
-#    o3d.visualization.draw_geometries([pcd])
+def visualize_pc(pc: np.ndarray):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pc)
+    o3d.visualization.draw_geometries([pcd])
 
 def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
     """Return homogeneous rotation matrix from quaternion.
@@ -130,34 +130,56 @@ class VLMapBuilderROS(Node):
         self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
         #pbar = tqdm(zip(self.rgb_paths, self.depth_paths, self.base_poses), total=len(self.rgb_paths))
-
-    # Given a point in 3D space, compute the corresponding pixel coordinates in an image with no distortion or forward distortion coefficients produced by the same camera
-    def project_point_to_pixel(self, point_pc):
-
-        x = point_pc[0] / point_pc[2]   # x/z
-        y = point_pc[1] / point_pc[2]   # y/z
-        #### DISTORTION MODEL:
-        #### TODO add distortion
-
-        pixel = np.zeros(2)
-        pixel[0] = x * self.focal_lenght_x + self.principal_point_x
-        pixel[1] = y * self.focal_lenght_y + self.principal_point_y
-        return pixel
     
-    # /* Given pixel coordinates and depth in an image with no distortion or inverse distortion coefficients, compute the corresponding point in 3D space relative to the same camera */
-    def project_pixel_to_point(self, depth : float, pixel):
-        
-        x = (pixel[0] - self.principal_point_x) / self.focal_lenght_x
-        y = (pixel[1] - self.principal_point_y) / self.focal_lenght_y
+    def project_pc(self, rgb, points, depth_factor=1.):
+        k = np.eye(3)
+        # Ergocub intrinsics: Realsense D455
+        intrinsics = {'fx': 612.7910766601562, 'fy': 611.8779296875, 'ppx': 321.7364196777344,
+                      'ppy': 245.0658416748047,
+                      'width': 640, 'height': 480}
+        width = intrinsics["width"]
+        height = intrinsics["height"]
 
-        #### TODO Add distortion model
+        #k[0, :] = np.array([intrinsics['fx'], 0, intrinsics['ppx']])
+        #k[1, 1:] = np.array([intrinsics['fy'], intrinsics['ppy']])
+        k = self.calib_mat
 
-        point = np.zeros(3)
-        point[0] = depth * x
-        point[1] = depth * y
-        point[2] = depth
-        return point
+        points = np.array(points) * depth_factor
+        uv = k @ points.T
+        uv = uv[0:2] / uv[2, :]
+
+        uv = np.round(uv, 0).astype(int)
     
+        uv[0, :] = np.clip(uv[0, :], 0, height-1)
+        uv[1, :] = np.clip(uv[1, :], 0, width-1)
+
+        rgb[uv[1, :], uv[0, :], :] = ((points - points.min(axis=0)) / (points - points.min(axis=0)).max(axis=0) * 255).astype(int)
+
+        return rgb
+
+    def from_depth_to_pc(self, depth, depth_factor=1., downsample_factor=10):
+        #fx, fy, cx, cy = intrinsics
+        fx = self.focal_lenght_x
+        fy = self.focal_lenght_y
+        cx = self.principal_point_x
+        cy = self.principal_point_y
+
+        points = []
+        h, w = depth.shape
+        for u in range(0, h):
+            for v in range(0, w):
+                z = depth[u, v]
+                if (z > 0.2 and z<6.0): # filter depth based on Z
+                    z = z / depth_factor
+                    x = ((v - cx) * z) / fx
+                    y = ((u - cy) * z) / fy
+                    points.append([x, y, z])
+        points = np.array(points)
+        points.itemsize
+        #Downsample
+        points=points[(np.random.randint(0, points.shape[0], np.round(len(points)/downsample_factor, 0).astype(int)) )]
+        return points
+
     def project_depth_features_pc(self, depth_img, features_per_pixels):
         #### TODO
         return
@@ -181,15 +203,6 @@ class VLMapBuilderROS(Node):
             self.lseg_model, rgb, ["example"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std
         )
         self.get_logger().info('lseg features extracted')
-        #pix_feats_intr = get_sim_cam_mat(pix_feats.shape[2], pix_feats.shape[3])
-        #### It's the same as the camera one, we are not in simulation anymore
-        pix_feats_intr = self.calib_mat 
-        # backproject depth point cloud
-        pc = self._backproject_depth(depth, self.calib_mat, self.depth_sample_rate, min_depth=0.2, max_depth=6) 
-        self.get_logger().info('backprojected depth')
-        # transform the point cloud to global frame (init base frame)
-        #pc_transform = tf @ self.base_transform @ self.base2cam_tf
-        #pc_global = transform_pc(pc, pc_transform)  # (3, N)
 
         #### Transform PC to map frame - i.e. global frame
         target_frame="map"
@@ -213,26 +226,31 @@ class VLMapBuilderROS(Node):
         #### Let's get an SE(4) matrix form
         transform_np = quaternion_matrix(transform_quat_np)
         transform_np[0:3, -1] = transform_pose_np
+        pc = self.from_depth_to_pc(depth, depth_factor=1.)
+        self.get_logger().info('backprojected depth')
         #### Convert normal pc to open3d format 
         pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(pc.T)
+        pcd.points = o3d.utility.Vector3dVector(pc)
         o3d.visualization.draw_geometries_with_vertex_selection([pcd])
         #### Transform the pc
-        #pc_global = transform_pc(pc, transform_np)  # (3, N)
-        #print(transform_np)
         pcd_global = pcd.transform(transform_np)
         o3d.visualization.draw_geometries_with_vertex_selection([pcd])
         #### Convert back to numpy
         pc_global = np.asarray(pcd_global.points)
-        
+
         self.get_logger().info('Evaluation of each point in the PC and projection into map with')
         iteration = 0
+        #### Debug
+        tmp = self.project_pc(rgb, pc, depth_factor=1.)
+        cv2.imshow("projected_pc2rgb", tmp)
+        cv2.waitKey(0)
         for point in pc_global:
             row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
 
             pixel = self.project_point_to_pixel(pc[iteration])
+            
             self.get_logger().info(f"projecting point x: {point[0]} y: {point[1]} z: {point[2]} to pixel: {pixel[0]} , {pixel[1]} at iteration {iteration}")
-            rgb_v = rgb[pixel[0], pixel[1], :]
+            #rgb_v = rgb[pixel[0], pixel[1], :]
             iteration += 1
 
         # Evaluation Loop of each point in 3d
