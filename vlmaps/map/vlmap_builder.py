@@ -209,9 +209,7 @@ class VLMapBuilderROS(Node):
         fy = self.focal_lenght_y
         cx = self.principal_point_x
         cy = self.principal_point_y
-        
-        #points = []
-        feature_points_ls = []
+
         # randomly sample pixels from depth (should be more memory efficient)
         uu, vv = np.where(depth[:,:]>=0)
         coords = np.column_stack((uu, vv))  # pixel pairs vector
@@ -219,6 +217,8 @@ class VLMapBuilderROS(Node):
         # Let's take only the number of pixels scaled by the downsample factor:
         # Since we have shuffled the coordinates, we take the first N items
         downsampled_coords = coords[:np.round(len(coords)/downsample_factor, 0).astype(int)]
+        feature_points_ls = np.empty([len(downsampled_coords), 3], dtype=object)
+        count = 0
         for item in downsampled_coords:
             # TODO optimize iteration formulation
             u = item[0]
@@ -228,9 +228,9 @@ class VLMapBuilderROS(Node):
                 z = z / depth_factor
                 x = ((v - cx) * z) / fx
                 y = ((u - cy) * z) / fy
-                # TODO avoid memory re-allocation each loop iter
-                feature_points_ls.append(FeturedPoint([x, y, z],features_per_pixels[0, :, u, v]))
-
+                feature_points_ls[count] = FeturedPoint([x, y, z],features_per_pixels[0, :, u, v]) # avoid memory re-allocation each loop iter
+                count += 1
+        feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)
 
     def sensors_callback(self, img_msg, depth_msg):
@@ -238,17 +238,16 @@ class VLMapBuilderROS(Node):
         build the 3D map centering at the first base frame
         """
         self.get_logger().info('sensors_callback')
-        #### TF check, first:
-        ## Transform PC to map frame - i.e. global frame
+        loop_timer = time.time()
+        #### first do a TF check between the camera and map frame
         target_frame="map"
         source_frame="depth"
         try:
             transform = self.tf_buffer.lookup_transform(
                     target_frame,
                     source_frame,
-                    rclpy.time.Time()
-                    )  #rclpy.time.Time() rclpy.duration.Duration(seconds=0.1)
-            #img_msg.header.stamp
+                    depth_msg.header.stamp
+                    )
         except TransformException as ex:
                 self.get_logger().info(
                         f'Could not transform {source_frame} to {target_frame}: {ex}')
@@ -271,20 +270,18 @@ class VLMapBuilderROS(Node):
 
         #### Segment image and extract features
         # get pixel-aligned LSeg features
+        start = time.time()
         pix_feats = get_lseg_feat(
             self.lseg_model, rgb, ["other", "screen", "table", "closet", "chair", "shelf", "door", "wall", "ceiling", "floor", "human"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, vis=False
         )
-        self.get_logger().info('lseg features extracted')
+        time_diff = time.time() - start
+        self.get_logger().info(f"lseg features extracted in: {time_diff}")
 
-        
         #pc = self.from_depth_to_pc(depth, depth_factor=1.)
         #self.get_logger().info('backprojected depth')
         #### Convert normal pc to open3d format 
         #pcd = o3d.geometry.PointCloud()
         #pcd.points = o3d.utility.Vector3dVector(pc)
-        #o3d.visualization.draw_geometries_with_vertex_selection([pcd])
-        #### Transform the pc
-        #pcd_global = pcd.transform(transform_np)
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd])
         #### Convert back to numpy
         #pc_global = np.asarray(pcd_global.points)
@@ -296,30 +293,33 @@ class VLMapBuilderROS(Node):
 
         #### Formatted PC with aligned features to pixel
         start = time.time()
-        featured_pc = self.project_depth_features_pc(depth, pix_feats)
+        featured_pc = self.project_depth_features_pc(depth, pix_feats, downsample_factor=12)
         time_diff = time.time() - start
         self.get_logger().info(f"Time for executing project_depth_features_pc: {time_diff}")
-        # Visualization for debug and projecting PC to img
-        pcd_feat = o3d.geometry.PointCloud()
-        pcd_feat.points = o3d.utility.Vector3dVector(featured_pc.points_xyz)
-        
-        projection = self.project_pc(rgb, featured_pc.points_xyz, depth_factor=1.)
-        cv2.imshow("projected_featuredPC", projection)
-        cv2.waitKey(0)
+
+        #projection = self.project_pc(rgb, featured_pc.points_xyz, depth_factor=1.)
+        #cv2.imshow("projected_featuredPC", projection)
+        #cv2.waitKey(0)
 
         #### Transform PC into map frame
+        start = time.time()
+        pcd_feat = o3d.geometry.PointCloud()
+        pcd_feat.points = o3d.utility.Vector3dVector(featured_pc.points_xyz)
         pcd_global = pcd_feat.transform(transform_np)
         featured_pc.points_xyz = np.asarray(pcd_global.points)
-        o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
+        time_diff = time.time() - start
+        self.get_logger().info(f"Time for transforming PC in map frame: {time_diff}")
+        #o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
 
-        #### Map update
+        #### Map update TODO: separate it in another thread
+        start = time.time()
         for (point, feature) in zip(featured_pc.points_xyz, featured_pc.embeddings):
             
             row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
             if self._out_of_range(row, col, height, self.gs, self.vh):
-                self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
+                #self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
                 continue
-            
+
             # when the max_id exceeds the reserved size,
             # double the grid_feat, grid_pos, weight, grid_rgb lengths
             if self.max_id >= self.grid_feat.shape[0]:
@@ -327,11 +327,10 @@ class VLMapBuilderROS(Node):
             
             # apply the distance weighting according to
             # ConceptFusion https://arxiv.org/pdf/2302.07241.pdf Sec. 4.1, Feature fusion
-            radial_dist_sq = np.sum(np.square(point))  #???
-            sigma_sq = 0.6
+            radial_dist_sq = np.sum(np.square(point))  
+            sigma_sq = 0.6  #TODO parameterize
             alpha = np.exp(-radial_dist_sq / (2 * sigma_sq))
 
-            ####
             #feat = pix_feats[0, :, py, px]
             feat = feature
             occupied_id = self.occupied_ids[row, col, height]
@@ -351,17 +350,21 @@ class VLMapBuilderROS(Node):
                 #    self.weight[occupied_id] + alpha
                 #)
                 self.weight[occupied_id] += alpha
-
-        # Save map each X callbacks
-        if self.frame_i % 30 == 0:
+        
+        time_diff = time.time() - start
+        self.get_logger().info(f"Time for updating Map: {time_diff}")
+        end_loop_time = time.time() - loop_timer
+        self.get_logger().info(f"CALLBACK TIME: {end_loop_time}")
+        # Save map each X callbacks TODO prameterize
+        if self.frame_i % 10 == 0:
             self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
             self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
-        self.frame_i += 1   # increase counter
+        self.frame_i += 1   # increase counter for map saving purposes
         self.get_logger().info(f"iter {self.frame_i}")
         return
 
-        #### TODO for memory efficency, we should launch a separate job for mapping registration
-        # Evaluation Loop of each point in 3d
+        #### OLD for memory efficency, we should launch a separate job for mapping registration
+        # Evaluation Loop of each point in 3d OLD LOOP
         for i, (p_global, p_local) in enumerate(zip(pc_global.T, pc.T)):
             # p_global is a point XYZ of the PC in the global frame
             row, col, height = base_pos2grid_id_3d(self.gs, self.cs, p_global[0], p_global[1], p_global[2])
@@ -419,8 +422,6 @@ class VLMapBuilderROS(Node):
             self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
         self.frame_i += 1   # increase counter
         self.get_logger().info(f"iter {self.frame_i}")
-        # TODO put it in a callback
-        #self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
 
     def _init_map(self, camera_height: float, cs: float, gs: int, map_path: Path) -> Tuple:
         """
