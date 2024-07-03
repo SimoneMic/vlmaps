@@ -302,12 +302,62 @@ class VLMapBuilderROS(Node):
         # Visualization for debug and projecting PC to img
         pcd_feat = o3d.geometry.PointCloud()
         pcd_feat.points = o3d.utility.Vector3dVector(featured_pc.points_xyz)
-        o3d.visualization.draw_geometries_with_vertex_selection([pcd_feat])
         
         projection = self.project_pc(rgb, featured_pc.points_xyz, depth_factor=1.)
         cv2.imshow("projected_featuredPC", projection)
         cv2.waitKey(0)
 
+        #### Transform PC into map frame
+        pcd_global = pcd_feat.transform(transform_np)
+        featured_pc.points_xyz = np.asarray(pcd_global.points)
+        o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
+
+        #### Map update
+        for (point, feature) in zip(featured_pc.points_xyz, featured_pc.embeddings):
+            
+            row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
+            if self._out_of_range(row, col, height, self.gs, self.vh):
+                self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
+                continue
+            
+            # when the max_id exceeds the reserved size,
+            # double the grid_feat, grid_pos, weight, grid_rgb lengths
+            if self.max_id >= self.grid_feat.shape[0]:
+                self._reserve_map_space(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb)
+            
+            # apply the distance weighting according to
+            # ConceptFusion https://arxiv.org/pdf/2302.07241.pdf Sec. 4.1, Feature fusion
+            radial_dist_sq = np.sum(np.square(point))  #???
+            sigma_sq = 0.6
+            alpha = np.exp(-radial_dist_sq / (2 * sigma_sq))
+
+            ####
+            #feat = pix_feats[0, :, py, px]
+            feat = feature
+            occupied_id = self.occupied_ids[row, col, height]
+
+            if occupied_id == -1:
+                self.occupied_ids[row, col, height] = self.max_id
+                self.grid_feat[self.max_id] = feat.flatten() * alpha
+                #self.grid_rgb[self.max_id] = rgb_v
+                self.weight[self.max_id] += alpha
+                self.grid_pos[self.max_id] = [row, col, height]
+                self.max_id = self.max_id + 1
+            else:
+                self.grid_feat[occupied_id] = (
+                    self.grid_feat[occupied_id] * self.weight[occupied_id] + feat.flatten() * alpha
+                ) / (self.weight[occupied_id] + alpha)
+                #self.grid_rgb[occupied_id] = (self.grid_rgb[occupied_id] * self.weight[occupied_id] + rgb_v * alpha) / (
+                #    self.weight[occupied_id] + alpha
+                #)
+                self.weight[occupied_id] += alpha
+
+        # Save map each X callbacks
+        if self.frame_i % 30 == 0:
+            self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
+            self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
+        self.frame_i += 1   # increase counter
+        self.get_logger().info(f"iter {self.frame_i}")
         return
 
         #### TODO for memory efficency, we should launch a separate job for mapping registration
