@@ -16,3 +16,8 @@ data
 *logs
 rgb.mp4
 depth.mp4
+ros2_vlmaps_interfaces/build
+ros2_vlmaps_interfaces/install
+ros2_vlmaps_interfaces/log
+application/outputs
+outputs

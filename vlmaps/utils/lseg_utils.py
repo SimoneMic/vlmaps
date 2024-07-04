@@ -66,7 +66,8 @@ def get_lseg_feat(
         with torch.cuda.device_of(image):
             with torch.no_grad():
                 outputs = image.new().resize_(batch, model.out_c, ph, pw).zero_().to(device)
-                logits_outputs = image.new().resize_(batch, len(labels), ph, pw).zero_().to(device)
+                if vis:
+                    logits_outputs = image.new().resize_(batch, len(labels), ph, pw).zero_().to(device)
             count_norm = image.new().resize_(batch, 1, ph, pw).zero_().to(device)
         # grid evaluation
         for idh in range(h_grids):
@@ -82,22 +83,24 @@ def get_lseg_feat(
                     # output = model(pad_crop_img)
                     output, logits = model(pad_crop_img, labels)
                 cropped = crop_image(output, 0, h1 - h0, 0, w1 - w0)
-                cropped_logits = crop_image(logits, 0, h1 - h0, 0, w1 - w0)
                 outputs[:, :, h0:h1, w0:w1] += cropped
-                logits_outputs[:, :, h0:h1, w0:w1] += cropped_logits
+                if vis:
+                    cropped_logits = crop_image(logits, 0, h1 - h0, 0, w1 - w0)
+                    logits_outputs[:, :, h0:h1, w0:w1] += cropped_logits
                 count_norm[:, :, h0:h1, w0:w1] += 1
         assert (count_norm == 0).sum() == 0
         outputs = outputs / count_norm
-        logits_outputs = logits_outputs / count_norm
         outputs = outputs[:, :, :height, :width]
-        logits_outputs = logits_outputs[:, :, :height, :width]
+        if vis:
+            logits_outputs = logits_outputs / count_norm
+            logits_outputs = logits_outputs[:, :, :height, :width]
     # outputs = resize_image(outputs, h, w, **{'mode': 'bilinear', 'align_corners': True})
     # outputs = resize_image(outputs, image.shape[0], image.shape[1], **{'mode': 'bilinear', 'align_corners': True})
     outputs = outputs.cpu()
     outputs = outputs.numpy()  # B, D, H, W
-    predicts = [torch.max(logit, 0)[1].cpu().numpy() for logit in logits_outputs]
-    pred = predicts[0]
     if vis:
+        predicts = [torch.max(logit, 0)[1].cpu().numpy() for logit in logits_outputs]
+        pred = predicts[0]
         new_palette = get_new_pallete(len(labels))
         mask, patches = get_new_mask_pallete(pred, new_palette, out_label_flag=True, labels=labels)
         seg = mask.convert("RGBA")

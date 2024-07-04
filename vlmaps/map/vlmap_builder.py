@@ -73,6 +73,7 @@ class FeturedPoint:
     def __init__(self, point, embedding) -> None:
         self.point_xyz = point
         self.embedding = embedding
+
 class FeaturedPC:
     def __init__(self, featured_points) -> None:
         self.featured_points = featured_points
@@ -293,7 +294,7 @@ class VLMapBuilderROS(Node):
 
         #### Formatted PC with aligned features to pixel
         start = time.time()
-        featured_pc = self.project_depth_features_pc(depth, pix_feats, downsample_factor=12)
+        featured_pc = self.project_depth_features_pc(depth, pix_feats, downsample_factor=20)
         time_diff = time.time() - start
         self.get_logger().info(f"Time for executing project_depth_features_pc: {time_diff}")
 
@@ -355,7 +356,7 @@ class VLMapBuilderROS(Node):
         self.get_logger().info(f"Time for updating Map: {time_diff}")
         end_loop_time = time.time() - loop_timer
         self.get_logger().info(f"CALLBACK TIME: {end_loop_time}")
-        # Save map each X callbacks TODO prameterize
+        # Save map each X callbacks TODO prameterize and do it in a separate thread
         if self.frame_i % 10 == 0:
             self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
             self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
