@@ -41,7 +41,7 @@ class VLMapPublisher(Node):
                  ) -> None:    # TODO use ros2 parameters from yaml file
         super().__init__(node_name)
         
-        self.init_categories = init_categories  #is this necessary?
+        self.init_categories = init_categories  #TODO is this necessary?
         self.config = config
         # Publishers Init
         self.map_pub = self.create_publisher(
@@ -53,8 +53,9 @@ class VLMapPublisher(Node):
 
         ### VLMaps stuff:
         self.vlmap = VLMap(config.map_config, data_dir=data_dirs[config.scene_id])
+        file_name = vlmap_name + ".h5df"
         ### Loading
-        self.map_path = Path(vlmap_dir) + "/" + vlmap_name + ".h5df"    # TODO check formatting for safety measure
+        self.map_path = Path(vlmap_dir) / file_name     # TODO check formatting for safety measure
         try:
             if self.load_vlmap(self.map_path):
                 print("VLMap loaded successfully")
@@ -66,9 +67,8 @@ class VLMapPublisher(Node):
         print("considering categories: ")
         self.categories = mp3dcat[:]    # TODO improve parameterization
         print(self.categories)   #all categories
+        print(f"{node_name} started successfully")
         
-        
-
 
     def index_map_callback(self, request, response):
         if self.init_categories:
@@ -118,7 +118,8 @@ class VLMapPublisher(Node):
 
     def load_map_callback(self, request, response):
         try:
-            if not self.load_vlmap(request.path):
+            path = request.path + ".h5df"
+            if not self.load_vlmap(path):
                 response.is_ok = False
                 response.error_msg="VLMap path not valid: the file doesn't exist"
                 return response
@@ -132,7 +133,7 @@ class VLMapPublisher(Node):
             return response
 
     def load_vlmap(self, path) -> bool:
-        self.map_path = Path(path) / ".h5df"
+        self.map_path = Path(path) 
         print(f"VLMap path: {self.map_path}")
         if not self.map_path.exists():
             print("VLMap path not valid: the file doesn't exist.")
@@ -151,14 +152,14 @@ class VLMapPublisher(Node):
 
 @hydra.main(
     version_base=None,
-    config_path="../config",
+    config_path="../../config",
     config_name="map_indexing_cfg.yaml",
 )
 def main(config, args=None):
     rclpy.init(args=args)
     map_dir = "/home/ergocub"
     map_name="vlmaps"
-    ros_node = VLMapPublisher(map_dir, config, vlmap_dir=map_dir, vlmap_name=map_name)
+    ros_node = VLMapPublisher("vlmaps_srv_node" ,config, vlmap_dir=map_dir, vlmap_name=map_name)
     rclpy.spin(ros_node)
 
     rclpy.shutdown()
