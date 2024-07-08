@@ -362,7 +362,10 @@ class VLMapBuilderROS(Node):
         # Save map each X callbacks TODO prameterize and do it in a separate thread
         if self.frame_i % 10 == 0:
             self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
+            time_save = time.time()
             self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
+            time_save_diff = time.time() - time_save
+            self.get_logger().info(f"Time for Saving Map: {time_save_diff}")
         self.frame_i += 1   # increase counter for map saving purposes
         self.get_logger().info(f"iter {self.frame_i}")
         return
@@ -518,7 +521,7 @@ class VLMapBuilderROS(Node):
         return pc
 
     def _out_of_range(self, row: int, col: int, height: int, gs: int, vh: int) -> bool:
-        return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0
+        return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0   # TODO handle negative values
 
     def _reserve_map_space(
         self, grid_feat: np.ndarray, grid_pos: np.ndarray, weight: np.ndarray, grid_rgb: np.ndarray

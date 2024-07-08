@@ -110,6 +110,15 @@ class VLMap(Map):
         ) = load_3d_map(self.map_save_path)
 
         return True
+    
+    # Wrapper - TODO: change approach and replace the original one
+    def vlmap_load_3d_map_params(self, mapped_iter_list, grid_feat, grid_pos, weight, occupied_ids, grid_rgb):
+        self.mapped_iter_list= mapped_iter_list
+        self.grid_feat= grid_feat
+        self.grid_pos= grid_pos
+        self.weight= weight
+        self.occupied_ids= occupied_ids
+        self.grid_rgb= grid_rgb
 
     def _init_clip(self, clip_version="ViT-B/32"):
         if hasattr(self, "clip_model"):
