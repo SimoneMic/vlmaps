@@ -70,19 +70,22 @@ def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry
         ), dtype=np.float64)
 
 class FeturedPoint:
-    def __init__(self, point, embedding) -> None:
+    def __init__(self, point, embedding, rgb) -> None:
         self.point_xyz = point
         self.embedding = embedding
+        self.rgb = rgb
 
 class FeaturedPC:
     def __init__(self, featured_points) -> None:
         self.featured_points = featured_points
         self.points_xyz = np.zeros([len(self.featured_points), 3])
         self.embeddings = np.zeros([len(self.featured_points), 512])  # TODO parameterize embeddings size
+        self.rgb = np.zeros([len(self.featured_points), 3])
         i = 0
         for featured_point in self.featured_points:
             self.points_xyz[i] = featured_point.point_xyz
             self.embeddings[i] = featured_point.embedding
+            self.rgb[i] = featured_point.rgb
             i += 1
 
 #### ROS2 wrapper
@@ -205,7 +208,7 @@ class VLMapBuilderROS(Node):
         self.get_logger().info(f"Time for executing from_depth_to_pc: {time_diff}")
         return points
 
-    def project_depth_features_pc(self, depth, features_per_pixels, depth_factor=1., downsample_factor=10):
+    def project_depth_features_pc(self, depth, features_per_pixels, color_img, depth_factor=1., downsample_factor=10):
         fx = self.focal_lenght_x
         fy = self.focal_lenght_y
         cx = self.principal_point_x
@@ -229,7 +232,7 @@ class VLMapBuilderROS(Node):
                 z = z / depth_factor
                 x = ((v - cx) * z) / fx
                 y = ((u - cy) * z) / fy
-                feature_points_ls[count] = FeturedPoint([x, y, z],features_per_pixels[0, :, u, v]) # avoid memory re-allocation each loop iter
+                feature_points_ls[count] = FeturedPoint([x, y, z],features_per_pixels[0, :, u, v], color_img[u, v, :]) # avoid memory re-allocation each loop iter
                 count += 1
         feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)
@@ -294,7 +297,7 @@ class VLMapBuilderROS(Node):
 
         #### Formatted PC with aligned features to pixel
         start = time.time()
-        featured_pc = self.project_depth_features_pc(depth, pix_feats, downsample_factor=20)
+        featured_pc = self.project_depth_features_pc(depth, pix_feats, rgb, downsample_factor=20)
         time_diff = time.time() - start
         self.get_logger().info(f"Time for executing project_depth_features_pc: {time_diff}")
 
@@ -314,7 +317,7 @@ class VLMapBuilderROS(Node):
 
         #### Map update TODO: separate it in another thread
         start = time.time()
-        for (point, feature) in zip(featured_pc.points_xyz, featured_pc.embeddings):
+        for (point, feature, rgb) in zip(featured_pc.points_xyz, featured_pc.embeddings, featured_pc.rgb):
             
             row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
             if self._out_of_range(row, col, height, self.gs, self.vh):
@@ -339,7 +342,7 @@ class VLMapBuilderROS(Node):
             if occupied_id == -1:
                 self.occupied_ids[row, col, height] = self.max_id
                 self.grid_feat[self.max_id] = feat.flatten() * alpha
-                #self.grid_rgb[self.max_id] = rgb_v
+                self.grid_rgb[self.max_id] = rgb
                 self.weight[self.max_id] += alpha
                 self.grid_pos[self.max_id] = [row, col, height]
                 self.max_id = self.max_id + 1
@@ -347,9 +350,9 @@ class VLMapBuilderROS(Node):
                 self.grid_feat[occupied_id] = (
                     self.grid_feat[occupied_id] * self.weight[occupied_id] + feat.flatten() * alpha
                 ) / (self.weight[occupied_id] + alpha)
-                #self.grid_rgb[occupied_id] = (self.grid_rgb[occupied_id] * self.weight[occupied_id] + rgb_v * alpha) / (
-                #    self.weight[occupied_id] + alpha
-                #)
+                self.grid_rgb[occupied_id] = (self.grid_rgb[occupied_id] * self.weight[occupied_id] + rgb * alpha) / (
+                    self.weight[occupied_id] + alpha
+                )
                 self.weight[occupied_id] += alpha
         
         time_diff = time.time() - start
