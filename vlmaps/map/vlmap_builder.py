@@ -13,6 +13,7 @@ import open3d as o3d
 from cv_bridge import CvBridge
 import open3d as o3d
 import time
+from geometry_msgs.msg import PoseWithCovarianceStamped
 
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
@@ -97,7 +98,7 @@ class VLMapBuilderROS(Node):
     ):
         super().__init__('VLMap_builder_node')
         self.map_config = map_config
-
+        self.amcl_cov = np.full([36], 0.2)  #init with an high covariance value for each element
         # tf buffer init
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -108,6 +109,12 @@ class VLMapBuilderROS(Node):
         self.depth_sub = message_filters.Subscriber(self, Image, depth_topic)
         self.tss = message_filters.ApproximateTimeSynchronizer([self.img_sub, self.depth_sub], 1, slop=0.3)        
         self.tss.registerCallback(self.sensors_callback)
+        self.amcl_sub = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/amcl_pose",
+            self.amcl_callback,
+            10
+        )
         ## First part of create_mobile_base_map for init stuff
         # access config info
         camera_height = self.map_config.pose_info.camera_height
@@ -257,6 +264,11 @@ class VLMapBuilderROS(Node):
                         f'Could not transform {source_frame} to {target_frame}: {ex}')
                 return
         self.get_logger().info('Transform available')
+        # Check covariance: TODO is it enough to check only two values?
+        if not (abs(self.amcl_cov.max()) < 0.01) and (abs(self.amcl_cov.min()) < 0.01):
+            self.get_logger().info(f'Covariance too big: skipping callback untill')
+            return
+
         ## Convert tf2 transform to np array components
         transform_pose_np = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
         transform_quat_np = np.array([transform.transform.rotation.x, transform.transform.rotation.y,
@@ -429,6 +441,10 @@ class VLMapBuilderROS(Node):
             self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
         self.frame_i += 1   # increase counter
         self.get_logger().info(f"iter {self.frame_i}")
+    
+    # Simply store the covariance values, will be analyze
+    def amcl_callback(self, msg):
+        self.amcl_cov = msg.pose.covariance
 
     def _init_map(self, camera_height: float, cs: float, gs: int, map_path: Path) -> Tuple:
         """
