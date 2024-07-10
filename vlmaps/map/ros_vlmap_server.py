@@ -114,10 +114,11 @@ class VLMapPublisher(Node):
             marker.pose.position.x = 0.0
             marker.pose.position.y = 0.0
             marker.pose.position.z = 0.0
+            # VLMAPS has inverted x and y axis, on how they save the map. So we need to do a 180 rotation around Z axis
             marker.pose.orientation.x = 0.0
             marker.pose.orientation.y = 0.0
-            marker.pose.orientation.z = 0.0
-            marker.pose.orientation.w = 1.0
+            marker.pose.orientation.z = 1.0
+            marker.pose.orientation.w = 0.0
 
             for u in range(mask_2d.shape[0]):
                 for v in range(mask_2d.shape[1]):
@@ -125,9 +126,9 @@ class VLMapPublisher(Node):
                         color = rgb_2d[u, v]
                         if np.mean(color) < 255:  
                             p = Point()
-                            p.x = v  * 0.05  - (mask_2d.shape[0] * 0.05 / 2) # TODO parameterize + self.config.map_origin[0]
-                            p.y = u * 0.05  - (mask_2d.shape[1] * 0.05 / 2)
-                            p.z = 0.10
+                            p.x = u  * 0.05  - (mask_2d.shape[0] * 0.05 / 2) # TODO parameterize + self.config.map_origin[0]
+                            p.y = v * 0.05  - (mask_2d.shape[1] * 0.05 / 2)
+                            p.z = 0.20
                             marker.points.append(p)
 
                             c = ColorRGBA()
