@@ -39,6 +39,7 @@ import message_filters
 #import sensor_msgs_py
 import rclpy
 import math
+import copy
 #from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
 
 def visualize_pc(pc: np.ndarray):
@@ -239,7 +240,7 @@ class VLMapBuilderROS(Node):
                 z = z / depth_factor
                 x = ((v - cx) * z) / fx
                 y = ((u - cy) * z) / fy
-                feature_points_ls[count] = FeturedPoint([x, y, z],features_per_pixels[0, :, u, v], color_img[u, v, :]) # avoid memory re-allocation each loop iter
+                feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :]) # avoid memory re-allocation each loop iter
                 count += 1
         feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)
