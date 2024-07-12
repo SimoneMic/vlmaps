@@ -8,7 +8,7 @@ pose_info:
   base_left_axis: [0, 1, 0]
   base_up_axis: [0, 0, 1]
 #cam_calib_mat: [540, 0, 540, 0, 540, 360, 0, 0, 1]
-cam_calib_mat: [386, 0, 321, 0, 386, 238, 0, 0, 1]
+cam_calib_mat: [386.0, 0.0, 321.0, 0.0, 386.0, 238.0, 0.0, 0.0, 1.0]
 grid_size: ${params.gs}
 cell_size: ${params.cs}
 depth_sample_rate: 30   #100

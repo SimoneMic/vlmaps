@@ -11,9 +11,9 @@ import torch
 import gdown
 import open3d as o3d
 from cv_bridge import CvBridge
-import open3d as o3d
 import time
 from geometry_msgs.msg import PoseWithCovarianceStamped
+import gc
 
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
@@ -36,10 +36,21 @@ from tf2_ros import TransformException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 import message_filters
-#import sensor_msgs_py
 import rclpy
 import math
-#from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
+import copy
+
+try:
+    from open3d.cuda.pybind.geometry import PointCloud
+    from open3d.cuda.pybind.utility import Vector3dVector
+    from open3d.cuda.pybind.visualization import draw_geometries
+except ImportError:
+    from open3d.cpu.pybind.geometry import PointCloud
+    from open3d.cpu.pybind.utility import Vector3dVector
+    from open3d.cpu.pybind.visualization import draw_geometries
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+
 
 def visualize_pc(pc: np.ndarray):
     pcd = o3d.geometry.PointCloud()
@@ -156,7 +167,15 @@ class VLMapBuilderROS(Node):
         self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
         self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
-        #pbar = tqdm(zip(self.rgb_paths, self.depth_paths, self.base_poses), total=len(self.rgb_paths))
+        self.device_o3d = o3d.core.Device("CPU:0")
+        self.vbg = o3d.t.geometry.VoxelBlockGrid(
+            attr_names=('tsdf', 'weight'), #, 'embeddings'
+            attr_dtypes=(o3d.core.float32, o3d.core.float32),
+            attr_channels=((1), (1)),  #, (512)
+            voxel_size=0.05,
+            block_resolution=16,
+            block_count=100000,
+            device=self.device_o3d)
     
     def project_pc(self, rgb, points, depth_factor=1.):
         k = np.eye(3)
@@ -239,7 +258,7 @@ class VLMapBuilderROS(Node):
                 z = z / depth_factor
                 x = ((v - cx) * z) / fx
                 y = ((u - cy) * z) / fy
-                feature_points_ls[count] = FeturedPoint([x, y, z],features_per_pixels[0, :, u, v], color_img[u, v, :]) # avoid memory re-allocation each loop iter
+                feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :]) # avoid memory re-allocation each loop iter
                 count += 1
         feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)
@@ -282,6 +301,7 @@ class VLMapBuilderROS(Node):
         ## Convert depth from ros2 to OpenCv
         depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, "passthrough")  # TODO check image color encoding
         depth = depth.astype(np.float16)
+        depth_o3d = depth.astype(np.float32)
         self.get_logger().info('Ros2 to CV2 conversion')
 
         #### Segment image and extract features
@@ -326,7 +346,7 @@ class VLMapBuilderROS(Node):
         time_diff = time.time() - start
         self.get_logger().info(f"Time for transforming PC in map frame: {time_diff}")
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
-
+        self.raycasting(pcd_global, np.linalg.inv(transform_np), depth_o3d, rgb)
         #### Map update TODO: separate it in another thread
         start = time.time()
         for (point, feature, rgb) in zip(featured_pc.points_xyz, featured_pc.embeddings, featured_pc.rgb):
@@ -382,66 +402,43 @@ class VLMapBuilderROS(Node):
         self.get_logger().info(f"iter {self.frame_i}")
         return
 
-        #### OLD for memory efficency, we should launch a separate job for mapping registration
-        # Evaluation Loop of each point in 3d OLD LOOP
-        for i, (p_global, p_local) in enumerate(zip(pc_global.T, pc.T)):
-            # p_global is a point XYZ of the PC in the global frame
-            row, col, height = base_pos2grid_id_3d(self.gs, self.cs, p_global[0], p_global[1], p_global[2])
-            if self._out_of_range(row, col, height, self.gs, self.vh):
-                #self.get_logger().info(f"out of range with p0 {p[0]} p1 {p[1]} p2 {p[2]}")
-                continue
-            
-            # project the point of the clout to the rgb image
-            px, py, pz = project_point(self.calib_mat, p_local)
-            rgb_v = rgb[py, px, :]
-            #px, py, pz = project_point(pix_feats_intr, p_local)
+    # Let's do this in background on a separate thread, global_pc should not be already added
+    def raycasting(self, global_pc, tf_map2depth, depth_img, rgb_img):
+        start = time.time()
+        #### Transform the global map in the depth frame:
+        map_pcd = o3d.geometry.PointCloud()
+        map_pcd.points = o3d.utility.Vector3dVector(self.grid_pos[:])
+        map_pcd.colors = o3d.utility.Vector3dVector(self.grid_rgb / 255)
+        #o3d.visualization.draw_geometries_with_vertex_selection([map_pcd])
+        map_pc_local_frame = map_pcd.transform(tf_map2depth)
+        #o3d.visualization.draw_geometries_with_vertex_selection([map_pc_local_frame])
 
+        print('voxelization')
+        voxel_grid_map = o3d.geometry.VoxelGrid.create_from_point_cloud(map_pcd, voxel_size= 1.0)   #TODO parameterize
+        o3d.visualization.draw_geometries([voxel_grid_map])
+        #### VoxelBlockGrid computation
+        
+        depth_as_img = o3d.t.geometry.Image(o3d.core.Tensor((depth_img).astype(np.float32)))
+        #color_as_img = o3d.t.geometry.Image(o3d.core.Tensor((rgb_img).astype(np.float32)))
 
-            
-            if height > self.height_map[row, col]:
-                self.height_map[row, col] = height
-                self.cv_map[row, col, :] = rgb_v
+        extrinsic = o3d.core.Tensor(tf_map2depth.astype(np.float64))
+        depth_intrinsic = o3d.core.Tensor(self.calib_mat.astype(np.float64))
+        depth_max = 6.0
+        depth_scale = 1.0
+        # Integration
+        frustum_block_coords = self.vbg.compute_unique_block_coordinates(
+            depth_as_img, depth_intrinsic, extrinsic, depth_scale,
+            depth_max)    # TODO parameterize
+        self.vbg.integrate(frustum_block_coords, depth_as_img, depth_intrinsic,
+                          extrinsic, depth_scale,
+                          depth_max)
+        # Visualize
+        pcd = self.vbg.extract_point_cloud()
+        o3d.visualization.draw_geometries([pcd])
 
-            # when the max_id exceeds the reserved size,
-            # double the grid_feat, grid_pos, weight, grid_rgb lengths
-            if self.max_id >= self.grid_feat.shape[0]:
-                self._reserve_map_space(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb)
+        time_diff = time.time() - start
+        self.get_logger().info(f"Time for raycasting: {time_diff}")
 
-            # apply the distance weighting according to
-            # ConceptFusion https://arxiv.org/pdf/2302.07241.pdf Sec. 4.1, Feature fusion
-            radial_dist_sq = np.sum(np.square(p_local))
-            sigma_sq = 0.6
-            alpha = np.exp(-radial_dist_sq / (2 * sigma_sq))
-
-            # update map features
-            if not (px < 0 or py < 0 or px >= pix_feats.shape[3] or py >= pix_feats.shape[2]):
-                feat = pix_feats[0, :, py, px]
-                occupied_id = self.occupied_ids[row, col, height]
-                if occupied_id == -1:
-                    self.occupied_ids[row, col, height] = self.max_id
-                    self.grid_feat[self.max_id] = feat.flatten() * alpha
-                    self.grid_rgb[self.max_id] = rgb_v
-                    self.weight[self.max_id] += alpha
-                    self.grid_pos[self.max_id] = [row, col, height]
-                    self.max_id = self.max_id + 1
-                else:
-                    self.grid_feat[occupied_id] = (
-                        self.grid_feat[occupied_id] * self.weight[occupied_id] + feat.flatten() * alpha
-                    ) / (self.weight[occupied_id] + alpha)
-                    self.grid_rgb[occupied_id] = (self.grid_rgb[occupied_id] * self.weight[occupied_id] + rgb_v * alpha) / (
-                        self.weight[occupied_id] + alpha
-                    )
-                    self.weight[occupied_id] += alpha
-
-        self.mapped_iter_set.add(self.frame_i)
-        #if self.frame_i % 100 == 99:
-        #### Save Map each N callbacks TODO parameterize
-        if self.frame_i % 30 == 0:
-            self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
-            self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
-        self.frame_i += 1   # increase counter
-        self.get_logger().info(f"iter {self.frame_i}")
-    
     # Simply store the covariance values, will be analyze
     def amcl_callback(self, msg):
         self.amcl_cov = msg.pose.covariance

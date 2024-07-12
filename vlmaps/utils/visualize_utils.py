@@ -12,12 +12,7 @@ def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray):
     pcd.points = o3d.utility.Vector3dVector(pc)
     pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
     o3d.visualization.draw_geometries([pcd])
-    #vis = o3d.visualization.Visualizer()
-    #vis.create_window()
-    #vis.add_geometry(pcd)
-    #vis.update_geometry(pcd)
-    #vis.poll_events()
-    #vis.update_renderer()
+
 
 
 def get_heatmap_from_mask_3d(
