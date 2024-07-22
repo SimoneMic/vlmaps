@@ -185,13 +185,14 @@ def traverse_pixels(entry_pos, exit_pos):
         #    x += stepX
         #    y += stepY
         
-        line.append(Pixel(x,y))
+        line.append(Pixel(x,y,z))
         
     return line  
   
 if __name__ == '__main__':
-    start = Point(np.random.uniform(0,7), np.random.uniform(0,7), np.random.uniform(0,7))
-    end = Point(np.random.uniform(0,7), np.random.uniform(0,7), np.random.uniform(0,7))
+    start = Point(np.random.uniform(-7,7), np.random.uniform(-7,7), np.random.uniform(-7,7))
+    end = Point(np.random.uniform(-7,7), np.random.uniform(-7,7), np.random.uniform(-7,7))
+    print(f"starting from X: {start[0]} Y: {start[1]} Z: {start[2]} TO end X: {end[0]} Y: {end[1]} Z: {end[2]}")
     pixels = traverse_pixels(start, end)
     
     # plot the results
@@ -200,11 +201,17 @@ if __name__ == '__main__':
     y = [pixel.y for pixel in pixels]
     z = [pixel.z for pixel in pixels]
     data[x, y, z] = 1
-    
-    fig, ax = plt.subplots()
-    ax.imshow((data.T), extent=(0, 8, 8, 0), origin='upper')
-    # draw gridlines
-    ax.grid(which='major', axis='both', linestyle='-', color='w', linewidth=2)
+    print(f"x: {x}")
+    print(f"y: {y}")
+    print(f"z: {z}")
+    ax =  plt.figure().add_subplot(projection='3d')
 
-    plt.plot([start.x, end.x], [start.y, end.y], marker = 'o')
+    ax.scatter(x, y, z, marker='o')
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_aspect("equal")
+    ax.set_title(f"From X: {int(start[0])} Y: {int(start[1])} Z: {int(start[2])} TO X: {int(end[0])} Y: {int(end[1])} Z: {int(end[2])}")
+
     plt.show()
