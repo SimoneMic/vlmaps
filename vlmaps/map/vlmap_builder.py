@@ -28,6 +28,7 @@ from vlmaps.utils.mapping_utils import (
     get_sim_cam_mat,
 )
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
+from vlmaps.utils.traverse_pixels import traverse_pixels
 
 #ROS2 stuff
 from tf2_ros.buffer import Buffer
@@ -301,7 +302,7 @@ class VLMapBuilderROS(Node):
         ## Convert depth from ros2 to OpenCv
         depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, "passthrough")  # TODO check image color encoding
         depth = depth.astype(np.float16)
-        depth_o3d = depth.astype(np.float32)
+        #depth_o3d = depth.astype(np.float32)
         self.get_logger().info('Ros2 to CV2 conversion')
 
         #### Segment image and extract features
@@ -346,7 +347,26 @@ class VLMapBuilderROS(Node):
         time_diff = time.time() - start
         self.get_logger().info(f"Time for transforming PC in map frame: {time_diff}")
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
-        self.raycasting(pcd_global, np.linalg.inv(transform_np), depth_o3d, rgb)
+
+
+        #### Raycast TODO combine with main loop to save computational effort
+        # Camera position in grid
+        map_to_cam_tf = np.linalg.inv(transform_np)
+        cam_pose = map_to_cam_tf[0:3,-1]
+        camera_pose_grid = base_pos2grid_id_3d(self.gs, self.cs, cam_pose[0], cam_pose[1], cam_pose[2])
+        voxels_to_clear = np.empty((0 , 3), int)
+        for point in featured_pc.points_xyz:
+            point_grid = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
+            if self._out_of_range(point_grid[0], point_grid[1], point_grid[2], self.gs, self.vh):
+                #self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
+                continue
+            traversed_pixels = traverse_pixels(camera_pose_grid, point_grid)
+            # TEMPORARY FOR DEBUG
+            np.append(voxels_to_clear, traversed_pixels)
+        pcd_clear = o3d.geometry.PointCloud()
+        pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
+        o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
+
         #### Map update TODO: separate it in another thread
         start = time.time()
         for (point, feature, rgb) in zip(featured_pc.points_xyz, featured_pc.embeddings, featured_pc.rgb):
