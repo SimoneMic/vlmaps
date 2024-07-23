@@ -26,9 +26,10 @@ from vlmaps.utils.mapping_utils import (
     base_pos2grid_id_3d,
     project_point,
     get_sim_cam_mat,
+    base_pos2grid_id_3d_torch
 )
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
-from vlmaps.utils.traverse_pixels import traverse_pixels
+import vlmaps.utils.traverse_pixels as raycast
 
 #ROS2 stuff
 from tf2_ros.buffer import Buffer
@@ -40,6 +41,7 @@ import message_filters
 import rclpy
 import math
 import copy
+import torch
 
 try:
     from open3d.cuda.pybind.geometry import PointCloud
@@ -351,20 +353,33 @@ class VLMapBuilderROS(Node):
 
         #### Raycast TODO combine with main loop to save computational effort
         # Camera position in grid
+        start_raycast = time.time()
         map_to_cam_tf = np.linalg.inv(transform_np)
         cam_pose = map_to_cam_tf[0:3,-1]
         camera_pose_grid = base_pos2grid_id_3d(self.gs, self.cs, cam_pose[0], cam_pose[1], cam_pose[2])
-        voxels_to_clear = np.empty((0 , 3), int)
+        start_pixel = raycast.Pixel(camera_pose_grid[0], camera_pose_grid[1], camera_pose_grid[2])
+        voxels_to_clear = []
+        torch_points = torch.tensor(featured_pc.points_xyz, device="cuda")
+        torch_grid = base_pos2grid_id_3d_torch(self.gs, self.cs, torch_points)
+        mask = ~((torch_grid < (torch.zeros_like(torch_grid)) + (torch_grid > torch.tensor([self.gs, self.gs, self.vh], device="cuda"))).any(dim=1))
+        torch_grid =  torch_grid[mask]
+        
+        ##################
         for point in featured_pc.points_xyz:
             point_grid = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
+             
             if self._out_of_range(point_grid[0], point_grid[1], point_grid[2], self.gs, self.vh):
                 #self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
                 continue
-            traversed_pixels = traverse_pixels(camera_pose_grid, point_grid)
+            end_pixel = raycast.Pixel(point_grid[0], point_grid[1], point_grid[2])
+            traversed_pixels = raycast.traverse_pixels(start_pixel, end_pixel)
             # TEMPORARY FOR DEBUG
-            np.append(voxels_to_clear, traversed_pixels)
+            voxels_to_clear += traversed_pixels
+        ##################
         pcd_clear = o3d.geometry.PointCloud()
         pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
+        time_diff = time.time() - start_raycast
+        self.get_logger().info(f"Time for raycasting PC in map frame: {time_diff}")
         o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
 
         #### Map update TODO: separate it in another thread

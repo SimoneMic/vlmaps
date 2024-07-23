@@ -3,6 +3,7 @@ import yaml
 import numpy as np
 import h5py
 import cv2
+import copy
 
 import torch
 
@@ -347,6 +348,13 @@ def base_pos2grid_id_3d(gs, cs, x_base, y_base, z_base):
     col = int(gs / 2 - int(y_base / cs))
     h = int(z_base / cs)
     return [row, col, h]
+
+def base_pos2grid_id_3d_torch(gs, cs, pointcloud):
+    #grid = copy.deepcopy(pointcloud)
+    grid = torch.zeros_like(pointcloud)
+    grid[:, :2] = (gs / 2 - (pointcloud[:, :2] / cs).to(torch.int))
+    grid[:, 2] = (pointcloud[:, 2]/cs)
+    return grid.to(torch.int)
 
 
 def base_pos2grid_id_3d_batch(gs, cs, pos_base_np):
