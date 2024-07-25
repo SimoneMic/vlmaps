@@ -153,6 +153,7 @@ class VLMapBuilderROS(Node):
             self.grid_rgb,
             self.mapped_iter_set,
             self.max_id,
+            self.loaded_map
         ) = self._init_map(camera_height, self.cs, self.gs, self.map_save_path)
 
         self.cv_bridge = CvBridge()
@@ -353,34 +354,45 @@ class VLMapBuilderROS(Node):
 
         #### Raycast TODO combine with main loop to save computational effort
         # Camera position in grid
-        start_raycast = time.time()
-        map_to_cam_tf = np.linalg.inv(transform_np)
-        cam_pose = map_to_cam_tf[0:3,-1]
-        camera_pose_grid = base_pos2grid_id_3d(self.gs, self.cs, cam_pose[0], cam_pose[1], cam_pose[2])
-        start_pixel = raycast.Pixel(camera_pose_grid[0], camera_pose_grid[1], camera_pose_grid[2])
-        voxels_to_clear = []
-        torch_points = torch.tensor(featured_pc.points_xyz, device="cuda")
-        torch_grid = base_pos2grid_id_3d_torch(self.gs, self.cs, torch_points)
-        mask = ~((torch_grid < (torch.zeros_like(torch_grid)) + (torch_grid > torch.tensor([self.gs, self.gs, self.vh], device="cuda"))).any(dim=1))
-        torch_grid =  torch_grid[mask]
-        
-        ##################
-        for point in featured_pc.points_xyz:
-            point_grid = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
-             
-            if self._out_of_range(point_grid[0], point_grid[1], point_grid[2], self.gs, self.vh):
-                #self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
-                continue
-            end_pixel = raycast.Pixel(point_grid[0], point_grid[1], point_grid[2])
-            traversed_pixels = raycast.traverse_pixels(start_pixel, end_pixel)
-            # TEMPORARY FOR DEBUG
-            voxels_to_clear += traversed_pixels
-        ##################
-        pcd_clear = o3d.geometry.PointCloud()
-        pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
-        time_diff = time.time() - start_raycast
-        self.get_logger().info(f"Time for raycasting PC in map frame: {time_diff}")
-        o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
+        if (self.frame_i != 0) or (self.loaded_map == True):
+            start_raycast = time.time()
+
+            map_to_cam_tf = np.linalg.inv(transform_np)
+            cam_pose = map_to_cam_tf[0:3,-1]
+            camera_pose_grid = base_pos2grid_id_3d(self.gs, self.cs, cam_pose[0], cam_pose[1], cam_pose[2])
+            start_pixel = raycast.Pixel(camera_pose_grid[0], camera_pose_grid[1], camera_pose_grid[2])
+            torch_points = torch.tensor(featured_pc.points_xyz, device="cuda")
+            torch_grid = base_pos2grid_id_3d_torch(self.gs, self.cs, torch_points)
+            # Filter points of the camera out of range
+            mask = ~((torch_grid < (torch.zeros_like(torch_grid)) + (torch_grid > torch.tensor([self.gs, self.gs, self.vh], device="cuda"))).any(dim=1))
+            torch_grid =  torch_grid[mask]
+            # Filter points on the map only in the bounding box of the camera pontcloud
+            
+            map_mask = (torch_grid.min(dim=0).values < torch.tensor(self.grid_pos, device='cuda')) & \
+                        (torch.tensor(self.grid_pos, device='cuda')  < torch_grid.max(dim=0).values)
+            map_points = torch.tensor(self.grid_pos, device='cuda')[map_mask.all(dim=1)]
+            # raycast.traverse_pixels_torch(start_pixel, torch_grid)
+
+            voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points, self.occupied_ids)
+            voxels_to_clear = voxels_to_clear.cpu().numpy()
+            ##################
+            #for point in featured_pc.points_xyz:
+            #    point_grid = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
+            #     
+            #    if self._out_of_range(point_grid[0], point_grid[1], point_grid[2], self.gs, self.vh):
+            #        #self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
+            #        continue
+            #    end_pixel = raycast.Pixel(point_grid[0], point_grid[1], point_grid[2])
+            #    traversed_pixels = raycast.traverse_pixels(start_pixel, end_pixel)
+            #    # TEMPORARY FOR DEBUG
+            #    voxels_to_clear += traversed_pixels
+            ##################
+            time_diff = time.time() - start_raycast
+            self.get_logger().info(f"Time for raycasting PC in map frame: {time_diff}")
+            if voxels_to_clear.size != 0:
+                pcd_clear = o3d.geometry.PointCloud()
+                pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
+                o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
 
         #### Map update TODO: separate it in another thread
         start = time.time()
@@ -493,6 +505,7 @@ class VLMapBuilderROS(Node):
         mapped_iter_set = set()
         mapped_iter_list = list(mapped_iter_set)
         max_id = 0
+        loaded_map = False
 
         # check if there is already saved map TODO print warn msg
         if os.path.exists(map_path):
@@ -506,8 +519,9 @@ class VLMapBuilderROS(Node):
             ) = load_3d_map(self.map_save_path)
             mapped_iter_set = set(mapped_iter_list)
             max_id = grid_feat.shape[0]
+            loaded_map = True
 
-        return vh, grid_feat, grid_pos, weight, occupied_ids, grid_rgb, mapped_iter_set, max_id
+        return vh, grid_feat, grid_pos, weight, occupied_ids, grid_rgb, mapped_iter_set, max_id, loaded_map
 
     def _init_lseg(self):
         crop_size = 480  # 480
@@ -569,7 +583,7 @@ class VLMapBuilderROS(Node):
         return pc
 
     def _out_of_range(self, row: int, col: int, height: int, gs: int, vh: int) -> bool:
-        return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0   # TODO handle negative values
+        return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0
 
     def _reserve_map_space(
         self, grid_feat: np.ndarray, grid_pos: np.ndarray, weight: np.ndarray, grid_rgb: np.ndarray

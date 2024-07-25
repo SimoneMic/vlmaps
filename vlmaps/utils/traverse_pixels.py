@@ -1,6 +1,8 @@
 import numpy as np
 from typing import NamedTuple
 import matplotlib.pyplot as plt
+import torch
+
 
 
 class Point(NamedTuple):
@@ -20,7 +22,97 @@ class Pixel(NamedTuple):
     x: int
     y: int  
     z: int
-        
+
+def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
+    entry_pos = torch.tensor(list(entry_pos), device='cuda')        # torch.Size([3])
+    #map = torch.tensor(list(map), device='cuda')                    # torch.size([1000000, 3])
+    occupied_map = torch.tensor(list(occupied_map), device='cuda')  # torch.size([1000, 1000, 50])
+
+    # Convert occupied map to an Nx3 tensor?
+
+    # express the direction components in x, y, and z (the sign is the direction) for each ray
+    directive_parameters = pc_grid - entry_pos   # torch.Size([9834, 3])    variable size N x 3
+    # Line in space parametric equation 
+    # (x,y,z) = (x1, y1, z1) + directive_parameters * t
+
+    # For each point in the map, we look at the ones that are distant < 1 from each ray
+    # Also, we consider the ones only in between the camera and the PC (pointcloud)
+    ray_mask_constrained = torch.zeros(map.shape[0], dtype=torch.bool, device="cuda")
+    threshold = 0.5
+
+    directive_parameters = directive_parameters.to(torch.float)
+    for ray, point in zip(directive_parameters, pc_grid):   # ray.shape = point.shape = torch.Size([3]) 
+        # I find for each ray all the voxels that are close enpugh to the line
+        # First, I need to find the plane that is parallel to that ray: for each point of the map
+        d = - torch.sum(map * ray, 1)     #(ray[0] * point[0], ray[1] * point[1], ray[2] * point[2])  PLANE OFFSET
+        # Find the position of the proection of "point" to ("ray" passing by the camera)
+        # First find the parametric value of the perpendicular line to the ray passing by the map point
+        t = - (d + torch.sum(point * ray)) / torch.sum(torch.square(ray))
+        # And the projection for each map point to that ray
+        projection_on_ray = point + (ray.to(torch.float).unsqueeze(-1) @ t.unsqueeze(0)).T
+        # Find the distance
+        dist = torch.norm(map - projection_on_ray, p=2, dim=1)
+        #ray_mask = ((torch.abs((map - entry_pos)/ray) < (threshold)) & ((map > entry_pos) & (map < point))) # torch.Size([1974, 3])
+        ray_mask = ((torch.abs(dist) < threshold) & (((map > entry_pos) & (map < point)).all(dim=1)))
+        ray_mask_constrained = ray_mask_constrained | ray_mask
+    points_to_remove = map[ray_mask_constrained]
+    #occupied_map[ray_mask_constrained] = -1
+
+    dd = - (directive_parameters.to(torch.float32) @ map.T.to(torch.float32))
+    tt = - (dd + (directive_parameters * pc_grid).sum(dim=1, keepdims=True)) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)
+    projections = pc_grid.unsqueeze(1) + torch.bmm(directive_parameters.unsqueeze(-1), tt.unsqueeze(1)).permute([0, 2, 1])
+    distances = torch.norm(map-projection_on_ray, p=2, dim=1)
+    return points_to_remove
+
+
+
+def traverse_pixels_torch(entry_pos, torch_grid, map):
+    entry_pos = torch.tensor(list(entry_pos), device='cuda')
+    delta = torch.abs(torch_grid - entry_pos)
+    norm = torch.norm(delta.to(torch.float), p=2)
+    # assert not (delta == 0).any(), "Entry point and exit point are the same, returning"
+
+    tDelta = norm / delta
+
+    step = torch.where(entry_pos < torch_grid, -1, 1)
+
+    mask = torch_grid < entry_pos
+    tmax = torch.zeros_like(torch_grid)
+
+    tmax[mask] = abs((torch_grid - torch.floor(torch_grid)) * tDelta)
+    tmax[~mask] = abs((torch.ceil(torch_grid) - torch_grid) * tDelta)
+
+    n = torch.where(mask, entry_pos - torch_grid, torch_grid - entry_pos).sum(dim=1)
+
+    # if exit_pos.x < entry_pos.x:
+    #     stepX = -1
+    #     tmaxX = abs((entry_pos.x - np.floor(entry_pos.x)) * tDeltaX)
+    #     n += x - end_pixel.x
+    # elif exit_pos.x > entry_pos.x:
+    #     stepX = 1
+    #     tmaxX = abs((np.ceil(entry_pos.x) - entry_pos.x) * tDeltaX)
+    #     n += end_pixel.x - x
+
+    # # Y direction 
+    # if exit_pos.y < entry_pos.y:
+    #     stepY = -1
+    #     tmaxY = abs((entry_pos.y - np.floor(entry_pos.y)) * tDeltaY)
+    #     n += y - end_pixel.y
+    # elif exit_pos.y > entry_pos.y:
+    #     stepY = 1
+    #     tmaxY = abs((np.ceil(entry_pos.y) - entry_pos.y) * tDeltaY)
+    #     n += end_pixel.y - y
+
+    #### Parametric representation of a straight line in space:
+    # 
+    #
+    #
+    #
+
+    
+
+
+ 
 def traverse_pixels(entry_pos, exit_pos):
     """
     Ray equation describes a point t along its trajectory:
@@ -70,10 +162,10 @@ def traverse_pixels(entry_pos, exit_pos):
         tmaxX = np.inf
         
         # Check for travel on Y, Z axes:
-        if dx == 0:
-            stepX = 0
-            tDeltaX = np.inf
-            tDeltaY = dy
+        if dz == 0:
+            stepZ = 0
+            tDeltaZ = np.inf
+            tDeltaZ = dy
         elif dy == 0:
             stepY = 0
             tDeltaX = dx
@@ -82,7 +174,7 @@ def traverse_pixels(entry_pos, exit_pos):
             tDeltaY = dy
             tDeltaZ = dz
         
-    elif dy == 0:       # Plane XZ
+    if dy == 0:       # Plane XZ
         stepY = 0
         tDeltaY = np.inf
         tmaxY = np.inf
