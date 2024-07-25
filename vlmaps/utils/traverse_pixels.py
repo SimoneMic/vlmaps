@@ -1,3 +1,4 @@
+import time
 import numpy as np
 from typing import NamedTuple
 import matplotlib.pyplot as plt
@@ -26,7 +27,7 @@ class Pixel(NamedTuple):
 def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     entry_pos = torch.tensor(list(entry_pos), device='cuda')        # torch.Size([3])
     #map = torch.tensor(list(map), device='cuda')                    # torch.size([1000000, 3])
-    occupied_map = torch.tensor(list(occupied_map), device='cuda')  # torch.size([1000, 1000, 50])
+    #occupied_map = torch.tensor(list(occupied_map), device='cuda')  # torch.size([1000, 1000, 50])
 
     # Convert occupied map to an Nx3 tensor?
 
@@ -41,6 +42,7 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     threshold = 0.5
 
     directive_parameters = directive_parameters.to(torch.float)
+    time_loop = time.time()
     for ray, point in zip(directive_parameters, pc_grid):   # ray.shape = point.shape = torch.Size([3]) 
         # I find for each ray all the voxels that are close enpugh to the line
         # First, I need to find the plane that is parallel to that ray: for each point of the map
@@ -57,12 +59,22 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
         ray_mask_constrained = ray_mask_constrained | ray_mask
     points_to_remove = map[ray_mask_constrained]
     #occupied_map[ray_mask_constrained] = -1
-
+    print (f"Loop: {time.time() - time_loop}")
+    start = time.time()
     dd = - (directive_parameters.to(torch.float32) @ map.T.to(torch.float32))
     tt = - (dd + (directive_parameters * pc_grid).sum(dim=1, keepdims=True)) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)
     projections = pc_grid.unsqueeze(1) + torch.bmm(directive_parameters.unsqueeze(-1), tt.unsqueeze(1)).permute([0, 2, 1])
-    distances = torch.norm(map-projection_on_ray, p=2, dim=1)
-    return points_to_remove
+    distances = (map.unsqueeze(0) - projections).norm(dim=-1, p=2)
+
+    mask = (
+     (torch.abs(distances) < threshold) &
+     ((map > entry_pos).unsqueeze(0).repeat(pc_grid.shape[0], 1, 1) &
+      (map.unsqueeze(0).repeat([pc_grid.shape[0], 1, 1]) < pc_grid.unsqueeze(1).repeat([1, map.shape[0], 1]))
+     ).all(dim=-1)
+    ).sum(dim=0).to(torch.bool)
+    points_to_remove_matrix = map[mask]
+    print (f"Matrix: {time.time() - start}")
+    return points_to_remove, points_to_remove_matrix
 
 
 

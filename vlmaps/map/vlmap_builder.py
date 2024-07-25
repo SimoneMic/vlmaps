@@ -373,8 +373,13 @@ class VLMapBuilderROS(Node):
             map_points = torch.tensor(self.grid_pos, device='cuda')[map_mask.all(dim=1)]
             # raycast.traverse_pixels_torch(start_pixel, torch_grid)
 
-            voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points, self.occupied_ids)
+            voxels_to_clear, voxels_to_clear_matrix = raycast.raycast_map_torch(start_pixel, torch_grid, map_points, self.occupied_ids)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
+            voxels_to_clear_matrix = voxels_to_clear_matrix.cpu().numpy()
+            if (voxels_to_clear == voxels_to_clear_matrix).all():
+                print("Equal voxels")
+            else:
+                print()
             ##################
             #for point in featured_pc.points_xyz:
             #    point_grid = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
