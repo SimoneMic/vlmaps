@@ -171,15 +171,7 @@ class VLMapBuilderROS(Node):
         self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
         self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
-        self.device_o3d = o3d.core.Device("CPU:0")
-        self.vbg = o3d.t.geometry.VoxelBlockGrid(
-            attr_names=('tsdf', 'weight'), #, 'embeddings'
-            attr_dtypes=(o3d.core.float32, o3d.core.float32),
-            attr_channels=((1), (1)),  #, (512)
-            voxel_size=0.05,
-            block_resolution=16,
-            block_count=100000,
-            device=self.device_o3d)
+        self.use_raycast = True
     
     def project_pc(self, rgb, points, depth_factor=1.):
         k = np.eye(3)
@@ -354,13 +346,13 @@ class VLMapBuilderROS(Node):
 
         #### Raycast TODO combine with main loop to save computational effort
         # Camera position in grid
-        if (self.frame_i != 0) or (self.loaded_map == True):
+        if ((self.frame_i != 0) or (self.loaded_map == True)) and self.use_raycast:
             start_raycast = time.time()
 
             map_to_cam_tf = np.linalg.inv(transform_np)
             cam_pose = map_to_cam_tf[0:3,-1]
             camera_pose_grid = base_pos2grid_id_3d(self.gs, self.cs, cam_pose[0], cam_pose[1], cam_pose[2])
-            start_pixel = raycast.Pixel(camera_pose_grid[0], camera_pose_grid[1], camera_pose_grid[2])
+            start_pixel = raycast.Pixel(camera_pose_grid[0], camera_pose_grid[1], camera_pose_grid[2])  # unnecessary
             torch_points = torch.tensor(featured_pc.points_xyz, device="cuda")
             torch_grid = base_pos2grid_id_3d_torch(self.gs, self.cs, torch_points)
             # Filter points of the camera out of range
@@ -373,13 +365,19 @@ class VLMapBuilderROS(Node):
             map_points = torch.tensor(self.grid_pos, device='cuda')[map_mask.all(dim=1)]
             # raycast.traverse_pixels_torch(start_pixel, torch_grid)
 
-            voxels_to_clear, voxels_to_clear_matrix = raycast.raycast_map_torch(start_pixel, torch_grid, map_points, self.occupied_ids)
+            voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points, self.occupied_ids)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
-            voxels_to_clear_matrix = voxels_to_clear_matrix.cpu().numpy()
-            if (voxels_to_clear == voxels_to_clear_matrix).all():
-                print("Equal voxels")
-            else:
-                print()
+            # Free GPU? TODO
+            map_points = map_points.cpu()
+            map_mask = map_mask.cpu()
+            mask = mask.cpu()
+            torch_points = torch_points.cpu()
+            #voxels_to_clear_matrix = voxels_to_clear_matrix.cpu().numpy()
+            #if (voxels_to_clear == voxels_to_clear_matrix).all():
+            #    print("Equal voxels")
+            #else:
+            #    print()
+
             ##################
             #for point in featured_pc.points_xyz:
             #    point_grid = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
@@ -394,10 +392,20 @@ class VLMapBuilderROS(Node):
             ##################
             time_diff = time.time() - start_raycast
             self.get_logger().info(f"Time for raycasting PC in map frame: {time_diff}")
+            #if voxels_to_clear.size != 0:
+            #    pcd_clear = o3d.geometry.PointCloud()
+            #    pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
+            #    o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
+            
+            # Remove voxels from map:
             if voxels_to_clear.size != 0:
-                pcd_clear = o3d.geometry.PointCloud()
-                pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
-                o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
+                time_map_raycast = time.time()
+                for voxel in voxels_to_clear:
+                    self.grid_feat[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_feat[0], dtype=np.float32)    # TODO parameterize also the type?
+                    self.grid_pos[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_pos[0], dtype=np.int32)
+                    self.grid_rgb[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_rgb[0], dtype=np.uint8)
+                    self.occupied_ids[voxel[0], voxel[1], voxel[2]] = -1
+                self.get_logger().info(f"Time for raycasting PC in map frame: {time.time() - time_map_raycast}")
 
         #### Map update TODO: separate it in another thread
         start = time.time()
@@ -444,14 +452,15 @@ class VLMapBuilderROS(Node):
         end_loop_time = time.time() - loop_timer
         self.get_logger().info(f"CALLBACK TIME: {end_loop_time}")
         # Save map each X callbacks TODO prameterize and do it in a separate thread
-        if self.frame_i % 10 == 0:
-            self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
-            time_save = time.time()
-            self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
-            time_save_diff = time.time() - time_save
-            self.get_logger().info(f"Time for Saving Map: {time_save_diff}")
+        #if self.frame_i % 10 == 0:
+        self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
+        time_save = time.time()
+        self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
+        time_save_diff = time.time() - time_save
+        self.get_logger().info(f"Time for Saving Map: {time_save_diff}")
         self.frame_i += 1   # increase counter for map saving purposes
         self.get_logger().info(f"iter {self.frame_i}")
+
         return
 
     # Let's do this in background on a separate thread, global_pc should not be already added

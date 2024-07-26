@@ -38,28 +38,28 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
 
     # For each point in the map, we look at the ones that are distant < 1 from each ray
     # Also, we consider the ones only in between the camera and the PC (pointcloud)
-    ray_mask_constrained = torch.zeros(map.shape[0], dtype=torch.bool, device="cuda")
-    threshold = 0.5
+    #ray_mask_constrained = torch.zeros(map.shape[0], dtype=torch.bool, device="cuda")
+    threshold = 1.0
 
     directive_parameters = directive_parameters.to(torch.float)
-    time_loop = time.time()
-    for ray, point in zip(directive_parameters, pc_grid):   # ray.shape = point.shape = torch.Size([3]) 
-        # I find for each ray all the voxels that are close enpugh to the line
-        # First, I need to find the plane that is parallel to that ray: for each point of the map
-        d = - torch.sum(map * ray, 1)     #(ray[0] * point[0], ray[1] * point[1], ray[2] * point[2])  PLANE OFFSET
-        # Find the position of the proection of "point" to ("ray" passing by the camera)
-        # First find the parametric value of the perpendicular line to the ray passing by the map point
-        t = - (d + torch.sum(point * ray)) / torch.sum(torch.square(ray))
-        # And the projection for each map point to that ray
-        projection_on_ray = point + (ray.to(torch.float).unsqueeze(-1) @ t.unsqueeze(0)).T
-        # Find the distance
-        dist = torch.norm(map - projection_on_ray, p=2, dim=1)
-        #ray_mask = ((torch.abs((map - entry_pos)/ray) < (threshold)) & ((map > entry_pos) & (map < point))) # torch.Size([1974, 3])
-        ray_mask = ((torch.abs(dist) < threshold) & (((map > entry_pos) & (map < point)).all(dim=1)))
-        ray_mask_constrained = ray_mask_constrained | ray_mask
-    points_to_remove = map[ray_mask_constrained]
-    #occupied_map[ray_mask_constrained] = -1
-    print (f"Loop: {time.time() - time_loop}")
+    #time_loop = time.time()
+    #for ray, point in zip(directive_parameters, pc_grid):   # ray.shape = point.shape = torch.Size([3]) 
+    #    # I find for each ray all the voxels that are close enpugh to the line
+    #    # First, I need to find the plane that is parallel to that ray: for each point of the map
+    #    d = - torch.sum(map * ray, 1)     #(ray[0] * point[0], ray[1] * point[1], ray[2] * point[2])  PLANE OFFSET
+    #    # Find the position of the proection of "point" to ("ray" passing by the camera)
+    #    # First find the parametric value of the perpendicular line to the ray passing by the map point
+    #    t = - (d + torch.sum(point * ray)) / torch.sum(torch.square(ray))
+    #    # And the projection for each map point to that ray
+    #    projection_on_ray = point + (ray.to(torch.float).unsqueeze(-1) @ t.unsqueeze(0)).T
+    #    # Find the distance
+    #    dist = torch.norm(map - projection_on_ray, p=2, dim=1)
+    #    #ray_mask = ((torch.abs((map - entry_pos)/ray) < (threshold)) & ((map > entry_pos) & (map < point))) # torch.Size([1974, 3])
+    #    ray_mask = ((torch.abs(dist) < threshold) & (((map > entry_pos) & (map < point)).all(dim=1)))
+    #    ray_mask_constrained = ray_mask_constrained | ray_mask
+    #points_to_remove = map[ray_mask_constrained]
+    ##occupied_map[ray_mask_constrained] = -1
+    #print (f"Loop: {time.time() - time_loop}")
     start = time.time()
     dd = - (directive_parameters.to(torch.float32) @ map.T.to(torch.float32))
     tt = - (dd + (directive_parameters * pc_grid).sum(dim=1, keepdims=True)) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)
@@ -74,7 +74,9 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     ).sum(dim=0).to(torch.bool)
     points_to_remove_matrix = map[mask]
     print (f"Matrix: {time.time() - start}")
-    return points_to_remove, points_to_remove_matrix
+
+    # TODO free GPU
+    return points_to_remove_matrix
 
 
 
