@@ -39,7 +39,7 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     # For each point in the map, we look at the ones that are distant < 1 from each ray
     # Also, we consider the ones only in between the camera and the PC (pointcloud)
     #ray_mask_constrained = torch.zeros(map.shape[0], dtype=torch.bool, device="cuda")
-    threshold = 1.0
+    threshold = 0.9
 
     directive_parameters = directive_parameters.to(torch.float)
     #time_loop = time.time()
@@ -66,10 +66,14 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     projections = pc_grid.unsqueeze(1) + torch.bmm(directive_parameters.unsqueeze(-1), tt.unsqueeze(1)).permute([0, 2, 1])
     distances = (map.unsqueeze(0) - projections).norm(dim=-1, p=2)
 
+    # Note: all the voxels of the map have positive coordinates
+    # We have to check if the camera point > or < the final point for selecting all the points in between
+
+
     mask = (
      (torch.abs(distances) < threshold) &
-     ((map > entry_pos).unsqueeze(0).repeat(pc_grid.shape[0], 1, 1) &
-      (map.unsqueeze(0).repeat([pc_grid.shape[0], 1, 1]) < pc_grid.unsqueeze(1).repeat([1, map.shape[0], 1]))
+     (((map - entry_pos).unsqueeze(0).repeat(pc_grid.shape[0], 1, 1) * directive_parameters.unsqueeze(1).repeat([1, map.shape[0], 1]) > 0.0) &
+      ((map.unsqueeze(0).repeat([pc_grid.shape[0], 1, 1]) - pc_grid.unsqueeze(1).repeat([1, map.shape[0], 1])) * directive_parameters.unsqueeze(1).repeat([1, map.shape[0], 1]) < 0.0)
      ).all(dim=-1)
     ).sum(dim=0).to(torch.bool)
     points_to_remove_matrix = map[mask]

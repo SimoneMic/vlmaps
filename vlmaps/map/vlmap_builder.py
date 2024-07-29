@@ -258,6 +258,49 @@ class VLMapBuilderROS(Node):
                 count += 1
         feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)
+    
+    def project_depth_features_pc_torch(self, depth, features_per_pixels, color_img, depth_factor=1.0):
+        fx = self.focal_lenght_x
+        fy = self.focal_lenght_y
+        cx = self.principal_point_x
+        cy = self.principal_point_y
+        intrisics = [[fx, 0.0, cx],
+                     [0.0, fy, cy],
+                     [0.0, 0.0, 1.0 / depth_factor]]
+        intrisics = torch.tensor(list(intrisics), device='cuda').type(torch.float32)
+
+        # filter depth coords based on z distance
+        uu, vv = np.where((depth > 0.2) & (depth< 6.0))
+        coords = np.column_stack((uu, vv))  # pixel pairs vector
+        coords = np.concatenate((coords.astype(np.float32), np.expand_dims(depth[uu, vv], axis=1).astype(np.float32)), axis=1)
+        coords_torch = torch.tensor(list(coords), device='cuda')
+        xx, yy, zz = intrisics.inverse() @ coords_torch.T
+        # TODO combine features and colors in same var
+        features = copy.deepcopy(features_per_pixels[0, :, uu, vv])
+        color = color_img[uu, vv, :]
+        # TODO clean memory
+        xx, yy, zz = xx.cpu().numpy(), yy.cpu().numpy(), zz.cpu().numpy()
+        pointcloud = np.concatenate((np.expand_dims(xx, 1), np.expand_dims(yy, 1), np.expand_dims(zz, 1)), axis=1)
+        #np.random.shuffle(coords)   # I have all the pixels randomly shuffled
+        # Let's take only the number of pixels scaled by the downsample factor:
+        # Since we have shuffled the coordinates, we take the first N items
+        #downsampled_coords = coords[:np.round(len(coords)/downsample_factor, 0).astype(int)]
+        #feature_points_ls = np.empty([len(coords), 3], dtype=object)
+        #count = 0
+#
+        #for item in coords:
+        #    # TODO optimize iteration formulation
+        #    u = item[0]
+        #    v = item[1]
+        #    z = depth[u, v]
+        #    if (z > 0.2 and z<6.0): # filter depth based on Z TODO parameterize these thresholds
+        #        z = z / depth_factor
+        #        x = ((v - cx) * z) / fx
+        #        y = ((u - cy) * z) / fy
+        #        feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :]) # avoid memory re-allocation each loop iter
+        #        count += 1
+        #feature_points_ls.resize(count, refcheck=False)
+        return pointcloud, features, color
 
     def sensors_callback(self, img_msg, depth_msg):
         """
