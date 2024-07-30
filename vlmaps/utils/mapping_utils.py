@@ -350,7 +350,7 @@ def base_pos2grid_id_3d(gs, cs, x_base, y_base, z_base):
     return [row, col, h]
 
 def base_pos2grid_id_3d_torch(gs, cs, pointcloud):
-    #grid = copy.deepcopy(pointcloud)
+    pointcloud = copy.deepcopy(pointcloud)
     grid = torch.zeros_like(pointcloud)
     grid[:, :2] = (gs / 2 - (pointcloud[:, :2] / cs).to(torch.int))
     grid[:, 2] = (pointcloud[:, 2]/cs)

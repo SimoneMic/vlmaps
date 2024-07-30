@@ -3,6 +3,7 @@ import numpy as np
 from typing import NamedTuple
 import matplotlib.pyplot as plt
 import torch
+import gc
 
 
 
@@ -24,7 +25,7 @@ class Pixel(NamedTuple):
     y: int  
     z: int
 
-def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
+def raycast_map_torch(entry_pos, pc_grid, map):
     entry_pos = torch.tensor(list(entry_pos), device='cuda')        # torch.Size([3])
     #map = torch.tensor(list(map), device='cuda')                    # torch.size([1000000, 3])
     #occupied_map = torch.tensor(list(occupied_map), device='cuda')  # torch.size([1000, 1000, 50])
@@ -41,7 +42,7 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     #ray_mask_constrained = torch.zeros(map.shape[0], dtype=torch.bool, device="cuda")
     threshold = 0.9
 
-    directive_parameters = directive_parameters.to(torch.float)
+    directive_parameters = directive_parameters.to(torch.float16)
     #time_loop = time.time()
     #for ray, point in zip(directive_parameters, pc_grid):   # ray.shape = point.shape = torch.Size([3]) 
     #    # I find for each ray all the voxels that are close enpugh to the line
@@ -60,12 +61,17 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     #points_to_remove = map[ray_mask_constrained]
     ##occupied_map[ray_mask_constrained] = -1
     #print (f"Loop: {time.time() - time_loop}")
-    start = time.time()
-    dd = - (directive_parameters.to(torch.float32) @ map.T.to(torch.float32))
-    tt = - (dd + (directive_parameters * pc_grid).sum(dim=1, keepdims=True)) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)
+    dd = - (directive_parameters.to(torch.float16) @ map.T.to(torch.float16))
+    tt = - dd + (directive_parameters * pc_grid).sum(dim=1, keepdims=True) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)
+    #tt = - (- (directive_parameters.to(torch.float16) @ map.T.to(torch.float16)) + (directive_parameters * pc_grid).sum(dim=1, keepdims=True)) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)
     projections = pc_grid.unsqueeze(1) + torch.bmm(directive_parameters.unsqueeze(-1), tt.unsqueeze(1)).permute([0, 2, 1])
+    #projections = pc_grid.unsqueeze(1) + torch.bmm(directive_parameters.unsqueeze(-1), (- (- (directive_parameters.to(torch.float16) @ map.T.to(torch.float16)) + (directive_parameters * pc_grid).sum(dim=1, keepdims=True)) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)).unsqueeze(1)).permute([0, 2, 1])
     distances = (map.unsqueeze(0) - projections).norm(dim=-1, p=2)
-
+    dd = dd.cpu()
+    tt = tt.cpu()
+    projections=projections.cpu()
+    gc.collect()
+    torch.cuda.empty_cache()
     # Note: all the voxels of the map have positive coordinates
     # We have to check if the camera point > or < the final point for selecting all the points in between
 
@@ -77,7 +83,6 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
      ).all(dim=-1)
     ).sum(dim=0).to(torch.bool)
     points_to_remove_matrix = map[mask]
-    print (f"Matrix: {time.time() - start}")
 
     # TODO free GPU
     return points_to_remove_matrix

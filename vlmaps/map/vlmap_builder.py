@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple, Set
 
 from tqdm import tqdm
-import cv2
 import torchvision.transforms as transforms
 import numpy as np
 from omegaconf import DictConfig
@@ -13,19 +12,13 @@ import open3d as o3d
 from cv_bridge import CvBridge
 import time
 from geometry_msgs.msg import PoseWithCovarianceStamped
-import gc
 
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
     load_3d_map,
     save_3d_map,
-    cvt_pose_vec2tf,
-    load_depth_npy,
     depth2pc,
-    transform_pc,
     base_pos2grid_id_3d,
-    project_point,
-    get_sim_cam_mat,
     base_pos2grid_id_3d_torch
 )
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
@@ -38,10 +31,10 @@ from tf2_ros import TransformException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 import message_filters
-import rclpy
 import math
 import copy
 import torch
+import gc
 
 try:
     from open3d.cuda.pybind.geometry import PointCloud
@@ -51,8 +44,6 @@ except ImportError:
     from open3d.cpu.pybind.geometry import PointCloud
     from open3d.cpu.pybind.utility import Vector3dVector
     from open3d.cpu.pybind.visualization import draw_geometries
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 
 
 def visualize_pc(pc: np.ndarray):
@@ -91,17 +82,22 @@ class FeturedPoint:
         self.rgb = rgb
 
 class FeaturedPC:
-    def __init__(self, featured_points) -> None:
+    def __init__(self, featured_points = []) -> None:
         self.featured_points = featured_points
         self.points_xyz = np.zeros([len(self.featured_points), 3])
         self.embeddings = np.zeros([len(self.featured_points), 512])  # TODO parameterize embeddings size
         self.rgb = np.zeros([len(self.featured_points), 3])
         i = 0
-        for featured_point in self.featured_points:
-            self.points_xyz[i] = featured_point.point_xyz
-            self.embeddings[i] = featured_point.embedding
-            self.rgb[i] = featured_point.rgb
-            i += 1
+        if len(featured_points) > 0:
+            for featured_point in self.featured_points:
+                self.points_xyz[i] = featured_point.point_xyz
+                self.embeddings[i] = featured_point.embedding
+                self.rgb[i] = featured_point.rgb
+                i += 1
+#class FeaturesPc:
+#    points_xyz: np.float16
+#    embeddings: []
+#    rgb: []
 
 #### ROS2 wrapper
 class VLMapBuilderROS(Node):
@@ -259,47 +255,40 @@ class VLMapBuilderROS(Node):
         feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)
     
-    def project_depth_features_pc_torch(self, depth, features_per_pixels, color_img, depth_factor=1.0):
+    def project_depth_features_pc_torch(self, depth, features_per_pixels, color_img, depth_factor=1.0, downsampling_factor=10.0):
         fx = self.focal_lenght_x
         fy = self.focal_lenght_y
         cx = self.principal_point_x
         cy = self.principal_point_y
-        intrisics = [[fx, 0.0, cx],
-                     [0.0, fy, cy],
-                     [0.0, 0.0, 1.0 / depth_factor]]
-        intrisics = torch.tensor(list(intrisics), device='cuda').type(torch.float32)
-
+        #intrisics = [[fx, 0.0, cx],
+        #             [0.0, fy, cy],
+        #             [0.0, 0.0, 1.0 / depth_factor]]
+        #intrisics = torch.tensor(list(intrisics), device='cuda').type(torch.float32)
+        depth = torch.tensor(list(depth), device='cuda').type(torch.float32)
         # filter depth coords based on z distance
-        uu, vv = np.where((depth > 0.2) & (depth< 6.0))
-        coords = np.column_stack((uu, vv))  # pixel pairs vector
-        coords = np.concatenate((coords.astype(np.float32), np.expand_dims(depth[uu, vv], axis=1).astype(np.float32)), axis=1)
-        coords_torch = torch.tensor(list(coords), device='cuda')
-        xx, yy, zz = intrisics.inverse() @ coords_torch.T
+        uu, vv = torch.where((depth > 0.2) & (depth< 6.0))
+
+        # Shuffle and downsample depth pixels
+        coords = torch.stack((uu, vv), dim=1)  # pixel pairs vector
+        coords = coords[torch.randperm(coords.size()[0])]
+        coords = coords[:int(coords.size(dim=0)/downsampling_factor)]
+        uu = coords[:, 0]
+        vv = coords[:, 1]
+        xx = (vv - cx) * depth[uu, vv] / fx
+        yy = (uu - cy) * depth[uu, vv] / fy
+        zz = depth[uu, vv] / depth_factor
         # TODO combine features and colors in same var
+        uu, vv = uu.cpu().numpy(), vv.cpu().numpy()
         features = copy.deepcopy(features_per_pixels[0, :, uu, vv])
         color = color_img[uu, vv, :]
         # TODO clean memory
-        xx, yy, zz = xx.cpu().numpy(), yy.cpu().numpy(), zz.cpu().numpy()
-        pointcloud = np.concatenate((np.expand_dims(xx, 1), np.expand_dims(yy, 1), np.expand_dims(zz, 1)), axis=1)
-        #np.random.shuffle(coords)   # I have all the pixels randomly shuffled
-        # Let's take only the number of pixels scaled by the downsample factor:
-        # Since we have shuffled the coordinates, we take the first N items
-        #downsampled_coords = coords[:np.round(len(coords)/downsample_factor, 0).astype(int)]
-        #feature_points_ls = np.empty([len(coords), 3], dtype=object)
-        #count = 0
-#
-        #for item in coords:
-        #    # TODO optimize iteration formulation
-        #    u = item[0]
-        #    v = item[1]
-        #    z = depth[u, v]
-        #    if (z > 0.2 and z<6.0): # filter depth based on Z TODO parameterize these thresholds
-        #        z = z / depth_factor
-        #        x = ((v - cx) * z) / fx
-        #        y = ((u - cy) * z) / fy
-        #        feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :]) # avoid memory re-allocation each loop iter
-        #        count += 1
-        #feature_points_ls.resize(count, refcheck=False)
+        pointcloud = torch.cat((xx.unsqueeze(1), yy.unsqueeze(1), zz.unsqueeze(1)), 1)
+        #xx, yy, zz = xx.cpu().numpy(), yy.cpu().numpy(), zz.cpu().numpy()
+        #coords = coords.cpu()
+        #pointcloud = np.concatenate((np.expand_dims(xx, 1), np.expand_dims(yy, 1), np.expand_dims(zz, 1)), axis=1)
+        #depth = depth.cpu().numpy()
+        pointcloud= pointcloud.cpu().numpy()
+
         return pointcloud, features, color
 
     def sensors_callback(self, img_msg, depth_msg):
@@ -368,9 +357,13 @@ class VLMapBuilderROS(Node):
 
         #### Formatted PC with aligned features to pixel
         start = time.time()
-        featured_pc = self.project_depth_features_pc(depth, pix_feats, rgb, downsample_factor=20)
-        time_diff = time.time() - start
-        self.get_logger().info(f"Time for executing project_depth_features_pc: {time_diff}")
+        #featured_pc = self.project_depth_features_pc(depth, pix_feats, rgb, downsample_factor=20)
+        pc, aligned_features, color_ = self.project_depth_features_pc_torch(depth, pix_feats, rgb, downsampling_factor=20)
+        featured_pc = FeaturedPC()
+        featured_pc.points_xyz = pc
+        featured_pc.embeddings = aligned_features
+        featured_pc.rgb = color_
+        self.get_logger().info(f"Time for executing project_depth_features_pc: {time.time() - start}")
 
         #projection = self.project_pc(rgb, featured_pc.points_xyz, depth_factor=1.)
         #cv2.imshow("projected_featuredPC", projection)
@@ -382,11 +375,10 @@ class VLMapBuilderROS(Node):
         pcd_feat.points = o3d.utility.Vector3dVector(featured_pc.points_xyz)
         pcd_global = pcd_feat.transform(transform_np)
         featured_pc.points_xyz = np.asarray(pcd_global.points)
-        time_diff = time.time() - start
-        self.get_logger().info(f"Time for transforming PC in map frame: {time_diff}")
+        self.get_logger().info(f"Time for transforming PC in map frame: {time.time() - start}")
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
-
-
+        
+        
         #### Raycast TODO combine with main loop to save computational effort
         # Camera position in grid
         if ((self.frame_i != 0) or (self.loaded_map == True)) and self.use_raycast:
@@ -395,26 +387,41 @@ class VLMapBuilderROS(Node):
             map_to_cam_tf = np.linalg.inv(transform_np)
             cam_pose = map_to_cam_tf[0:3,-1]
             camera_pose_grid = base_pos2grid_id_3d(self.gs, self.cs, cam_pose[0], cam_pose[1], cam_pose[2])
-            start_pixel = raycast.Pixel(camera_pose_grid[0], camera_pose_grid[1], camera_pose_grid[2])  # unnecessary
-            torch_points = torch.tensor(featured_pc.points_xyz, device="cuda")
-            torch_grid = base_pos2grid_id_3d_torch(self.gs, self.cs, torch_points)
-            # Filter points of the camera out of range
-            mask = ~((torch_grid < (torch.zeros_like(torch_grid)) + (torch_grid > torch.tensor([self.gs, self.gs, self.vh], device="cuda"))).any(dim=1))
-            torch_grid =  torch_grid[mask]
-            # Filter points on the map only in the bounding box of the camera pontcloud
-            
-            map_mask = (torch_grid.min(dim=0).values < torch.tensor(self.grid_pos, device='cuda')) & \
-                        (torch.tensor(self.grid_pos, device='cuda')  < torch_grid.max(dim=0).values)
-            map_points = torch.tensor(self.grid_pos, device='cuda')[map_mask.all(dim=1)]
-            # raycast.traverse_pixels_torch(start_pixel, torch_grid)
 
-            voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points, self.occupied_ids)
-            voxels_to_clear = voxels_to_clear.cpu().numpy()
-            # Free GPU? TODO
-            map_points = map_points.cpu()
+            # Convert the pointcloud points to torch
+            pc_points_torch = torch.tensor(featured_pc.points_xyz, device="cuda").to(torch.float16)
+            # Voxelize them
+            pc_voxels = (base_pos2grid_id_3d_torch(self.gs, self.cs, pc_points_torch))
+            # Filter points of the camera out of range of the map: TODO check if correct to do it
+            map_boundaries_torch = torch.tensor([self.gs, self.gs, self.vh], device="cuda")
+            mask_boundaries = ~((pc_voxels < (torch.zeros_like(pc_voxels)) + (pc_voxels > map_boundaries_torch)).any(dim=1))
+            pc_voxels =  pc_voxels[mask_boundaries]
+
+            # Convert the map points positions to torch
+            map_points_torch = torch.tensor(self.grid_pos, device='cuda')
+            # Filter points on the map only in the bounding box of the camera pontcloud
+            map_mask = (map_points_torch > pc_voxels.min(dim=0).values) & \
+                        (map_points_torch  < pc_voxels.max(dim=0).values)
+            map_points = map_points_torch[map_mask.all(dim=1)]
+            # raycast.traverse_pixels_torch(start_pixel, pc_voxels)
+            start = time.time()
             map_mask = map_mask.cpu()
-            mask = mask.cpu()
-            torch_points = torch_points.cpu()
+            map_boundaries_torch = map_boundaries_torch.cpu()
+            mask_boundaries= mask_boundaries.cpu()
+            map_points_torch = map_points_torch.cpu()
+            pc_points_torch = pc_points_torch.cpu()
+            gc.collect()
+            torch.cuda.empty_cache()
+            self.get_logger().info(f"Time for GC: {time.time() - start}")
+            
+            voxels_to_clear = raycast.raycast_map_torch(camera_pose_grid, pc_voxels, map_points)
+            # Free GPU? TODO
+            voxels_to_clear = voxels_to_clear.cpu().numpy()
+            map_points = map_points.cpu()
+            pc_voxels = pc_voxels.cpu()
+            
+            
+
             #voxels_to_clear_matrix = voxels_to_clear_matrix.cpu().numpy()
             #if (voxels_to_clear == voxels_to_clear_matrix).all():
             #    print("Equal voxels")
