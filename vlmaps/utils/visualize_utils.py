@@ -3,17 +3,25 @@ import open3d as o3d
 import cv2
 from tqdm import tqdm
 from scipy.ndimage import distance_transform_edt
+from multiprocessing import Process
 
+class Visualizer(Process):
 
-def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray):
+    def __init__(self, pcd: o3d.geometry.PointCloud):
+        super().__init__() 
+        self.pcd = pcd
+
+    def run(self):
+        o3d.visualization.draw_geometries_with_vertex_selection([self.pcd])
+
+def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray, voxel_size=1.0):
     grid_rgb = rgb / 255.0
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pc)
     pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
-    o3d.visualization.draw_geometries_with_vertex_selection([pcd])
-    voxel_grid_map = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size= 1.0)   #TODO parameterize
-    o3d.visualization.draw_geometries([voxel_grid_map])
+    # visualize the point cloud
+    Visualizer(pcd).start()
 
 def compute_point_cloud_difference(pcd_1, pcd_2, distance_threshold = 0.01):
     """

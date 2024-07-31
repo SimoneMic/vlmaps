@@ -6,6 +6,7 @@ from vlmaps.utils.visualize_utils import (
     visualize_rgb_map_3d,
     compute_point_cloud_difference
 )
+import threading
 
 @hydra.main(
     version_base=None,
@@ -21,6 +22,10 @@ def main(config: DictConfig) -> None:
     #vlmap.load_map(data_dirs[config.scene_id])
     vlmap_std.load_map("/home/ergocub/vlmaps.h5df")     
     vlmap_raytrace.load_map("/home/ergocub/vlmaps_raytrace_tensorized.h5df")
+    #thread_std = threading.Thread(target=visualize_rgb_map_3d, args=(vlmap_std.grid_pos, vlmap_std.grid_rgb))
+    #thread_std.start()
+    #thread_ray = threading.Thread(target=visualize_rgb_map_3d, args=(vlmap_raytrace.grid_pos, vlmap_raytrace.grid_rgb))
+    #thread_ray.start()
     visualize_rgb_map_3d(vlmap_std.grid_pos, vlmap_std.grid_rgb)
     visualize_rgb_map_3d(vlmap_raytrace.grid_pos, vlmap_raytrace.grid_rgb)
     diff = compute_point_cloud_difference(vlmap_std.grid_pos, vlmap_raytrace.grid_pos)
