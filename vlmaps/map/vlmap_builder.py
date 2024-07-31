@@ -407,34 +407,18 @@ class VLMapBuilderROS(Node):
                         (torch.tensor(self.grid_pos, device='cuda')  < torch_grid.max(dim=0).values)
             map_points = torch.tensor(self.grid_pos, device='cuda')[map_mask.all(dim=1)]
             # raycast.traverse_pixels_torch(start_pixel, torch_grid)
-
-            voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points, self.occupied_ids)
+            #st = time.time()
+            #voxels_to_clear = raycast.sampled_voxel_traversal(camera_pose_grid, torch_grid, map_points)
+            #self.get_logger().info(f"Time for raycasting PC in map frame: {time.time() - st}")
+            voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
-            # Free GPU? TODO
             map_points = map_points.cpu()
-            map_mask = map_mask.cpu()
-            mask = mask.cpu()
-            torch_points = torch_points.cpu()
-            #voxels_to_clear_matrix = voxels_to_clear_matrix.cpu().numpy()
-            #if (voxels_to_clear == voxels_to_clear_matrix).all():
-            #    print("Equal voxels")
-            #else:
-            #    print()
+            #removed_points = map_points[voxels_to_clear]
+            # Free GPU? TODO
 
-            ##################
-            #for point in featured_pc.points_xyz:
-            #    point_grid = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
-            #     
-            #    if self._out_of_range(point_grid[0], point_grid[1], point_grid[2], self.gs, self.vh):
-            #        #self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
-            #        continue
-            #    end_pixel = raycast.Pixel(point_grid[0], point_grid[1], point_grid[2])
-            #    traversed_pixels = raycast.traverse_pixels(start_pixel, end_pixel)
-            #    # TEMPORARY FOR DEBUG
-            #    voxels_to_clear += traversed_pixels
-            ##################
             time_diff = time.time() - start_raycast
             self.get_logger().info(f"Time for raycasting PC in map frame: {time_diff}")
+            self.get_logger().info(f"Voxels to remove: {voxels_to_clear.size}")
             #if voxels_to_clear.size != 0:
             #    pcd_clear = o3d.geometry.PointCloud()
             #    pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
@@ -448,7 +432,7 @@ class VLMapBuilderROS(Node):
                     self.grid_pos[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_pos[0], dtype=np.int32)
                     self.grid_rgb[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_rgb[0], dtype=np.uint8)
                     self.occupied_ids[voxel[0], voxel[1], voxel[2]] = -1
-                self.get_logger().info(f"Time for raycasting PC in map frame: {time.time() - time_map_raycast}")
+                self.get_logger().info(f"Time for raycasting and REMOVING INDICES: {time.time() - time_map_raycast}")
 
         #### Map update TODO: separate it in another thread
         start = time.time()

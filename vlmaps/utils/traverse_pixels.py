@@ -24,12 +24,50 @@ class Pixel(NamedTuple):
     y: int  
     z: int
 
-def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
+def sampled_voxel_traversal(entry_pos, pc_grid, map):
+    ray_source = torch.tensor(list(entry_pos), device='cuda')        # torch.Size([3])
+    # Generate a random 10x10x10 boolean tensor using PyTorch
+    #tensor = (torch.rand((10, 10, 10)) > 0.95).cuda()
+
+    # Sample a random 3D point within the range [0, 10]
+    #point = torch.rand(3).cuda() * 10
+
+    # Define a random direction for the line
+    #direction = torch.randn(3).cuda()
+    direction = (pc_grid - ray_source).float()
+    direction /= torch.norm(direction)  # Normalize the direction
+
+    # Create parametric equations for the line TODO parameterize
+    t = torch.linspace(0, 120, 500).cuda()  # Parameter t for the line equation: starts from 0 (camera) and goes up to 6m => 120 voxels, for 240 steps
+    t = t.unsqueeze(0).unsqueeze(0)
+    lines_points = ray_source.unsqueeze(1) + t * direction.unsqueeze(2)
+    lines_points = lines_points.permute(1, 0, 2).reshape(3, -1)
+
+    # Determine which voxels are crossed by the line
+    #voxel_coords = torch.stack(torch.meshgrid(torch.arange(10), torch.arange(10), torch.arange(10)), dim=-1).reshape(-1, 3).float().cuda()
+
+    # Calculate the min and max bounds for each voxel
+    voxel_min = map 
+    voxel_max = map + 1
+
+    # Check if line points are within any voxel's boundary
+    #within_bounds = ((lines_points.unsqueeze(2) >= voxel_min.T.unsqueeze(1)) & 
+    #                 (lines_points.unsqueeze(2) < voxel_max.T.unsqueeze(1))).all(dim=0)
+    batch_size = 2**12
+    crossed_voxels = torch.zeros(len(map), dtype=torch.bool, device="cuda")
+    for i in range(0, len(lines_points), batch_size):
+        batch_points = lines_points[:, i:i + batch_size]
+        within_bounds = ((batch_points.unsqueeze(2) >= voxel_min.T.unsqueeze(1)) & 
+                         (batch_points.unsqueeze(2) < voxel_max.T.unsqueeze(1))).all(dim=0)
+
+        crossed_voxels |= within_bounds.any(dim=0)
+
+    return crossed_voxels
+
+def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**11, distance_threshold = 0.9):
     entry_pos = torch.tensor(list(entry_pos), device='cuda')        # torch.Size([3])
     #map = torch.tensor(list(map), device='cuda')                    # torch.size([1000000, 3])
     #occupied_map = torch.tensor(list(occupied_map), device='cuda')  # torch.size([1000, 1000, 50])
-
-    # Convert occupied map to an Nx3 tensor?
 
     # express the direction components in x, y, and z (the sign is the direction) for each ray
     directive_parameters = pc_grid - entry_pos   # torch.Size([9834, 3])    variable size N x 3
@@ -39,7 +77,6 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     # For each point in the map, we look at the ones that are distant < 1 from each ray
     # Also, we consider the ones only in between the camera and the PC (pointcloud)
     #ray_mask_constrained = torch.zeros(map.shape[0], dtype=torch.bool, device="cuda")
-    threshold = 0.9
 
     directive_parameters = directive_parameters.to(torch.float)
     #time_loop = time.time()
@@ -60,7 +97,6 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
     #points_to_remove = map[ray_mask_constrained]
     ##occupied_map[ray_mask_constrained] = -1
     #print (f"Loop: {time.time() - time_loop}")
-    start = time.time()
     dd = - (directive_parameters.to(torch.float32) @ map.T.to(torch.float32))
     tt = - (dd + (directive_parameters * pc_grid).sum(dim=1, keepdims=True)) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)
     projections = pc_grid.unsqueeze(1) + torch.bmm(directive_parameters.unsqueeze(-1), tt.unsqueeze(1)).permute([0, 2, 1])
@@ -68,16 +104,21 @@ def raycast_map_torch(entry_pos, pc_grid, map, occupied_map):
 
     # Note: all the voxels of the map have positive coordinates
     # We have to check if the camera point > or < the final point for selecting all the points in between
+    crossed_voxels = torch.zeros(len(map), dtype=torch.bool, device="cuda")
+    for i in range(0, len(distances), batch_size):
+        distance_cond = torch.abs(distances[i:i + batch_size, :]) < distance_threshold
+        bigger_than_camera = (map - entry_pos).unsqueeze(0).repeat(pc_grid.shape[0], 1, 1)[i:i + batch_size, :] * directive_parameters.unsqueeze(1).repeat([1, map.shape[0], 1])[i:i + batch_size, :] > 0.0
+        smaller_than_pointcloud = (map.unsqueeze(0).repeat([pc_grid.shape[0], 1, 1])[i:i + batch_size, :] - pc_grid.unsqueeze(1).repeat([1, map.shape[0], 1])[i:i + batch_size, :]) * directive_parameters.unsqueeze(1).repeat([1, map.shape[0], 1])[i:i + batch_size, :] < 0.0
+        mask = (distance_cond & (bigger_than_camera & smaller_than_pointcloud).all(dim=-1)).sum(dim=0).to(torch.bool)
+        #mask = (
+        # (torch.abs(distances) < threshold) &
+        # (((map - entry_pos).unsqueeze(0).repeat(pc_grid.shape[0], 1, 1)[i:i + batch_size, :] * directive_parameters.unsqueeze(1).repeat([1, map.shape[0], 1]) > 0.0) &
+        #  ((map.unsqueeze(0).repeat([pc_grid.shape[0], 1, 1]) - pc_grid.unsqueeze(1).repeat([1, map.shape[0], 1])) * directive_parameters.unsqueeze(1).repeat([1, map.shape[0], 1]) < 0.0)
+        # ).all(dim=-1)
+        #).sum(dim=0).to(torch.bool)
+        crossed_voxels |= mask
 
-
-    mask = (
-     (torch.abs(distances) < threshold) &
-     (((map - entry_pos).unsqueeze(0).repeat(pc_grid.shape[0], 1, 1) * directive_parameters.unsqueeze(1).repeat([1, map.shape[0], 1]) > 0.0) &
-      ((map.unsqueeze(0).repeat([pc_grid.shape[0], 1, 1]) - pc_grid.unsqueeze(1).repeat([1, map.shape[0], 1])) * directive_parameters.unsqueeze(1).repeat([1, map.shape[0], 1]) < 0.0)
-     ).all(dim=-1)
-    ).sum(dim=0).to(torch.bool)
     points_to_remove_matrix = map[mask]
-    print (f"Matrix: {time.time() - start}")
 
     # TODO free GPU
     return points_to_remove_matrix
