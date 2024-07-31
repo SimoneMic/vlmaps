@@ -91,17 +91,18 @@ class FeturedPoint:
         self.rgb = rgb
 
 class FeaturedPC:
-    def __init__(self, featured_points) -> None:
+    def __init__(self, featured_points = []) -> None:
         self.featured_points = featured_points
         self.points_xyz = np.zeros([len(self.featured_points), 3])
         self.embeddings = np.zeros([len(self.featured_points), 512])  # TODO parameterize embeddings size
         self.rgb = np.zeros([len(self.featured_points), 3])
         i = 0
-        for featured_point in self.featured_points:
-            self.points_xyz[i] = featured_point.point_xyz
-            self.embeddings[i] = featured_point.embedding
-            self.rgb[i] = featured_point.rgb
-            i += 1
+        if len(featured_points) > 0:
+            for featured_point in self.featured_points:
+                self.points_xyz[i] = featured_point.point_xyz
+                self.embeddings[i] = featured_point.embedding
+                self.rgb[i] = featured_point.rgb
+                i += 1
 
 #### ROS2 wrapper
 class VLMapBuilderROS(Node):
@@ -171,7 +172,7 @@ class VLMapBuilderROS(Node):
         self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
         self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
-        self.use_raycast = True
+        self.use_raycast = False
     
     def project_pc(self, rgb, points, depth_factor=1.):
         k = np.eye(3)
@@ -259,28 +260,39 @@ class VLMapBuilderROS(Node):
         feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)
     
-    def project_depth_features_pc_torch(self, depth, features_per_pixels, color_img, depth_factor=1.0):
+    def project_depth_features_pc_torch(self, depth, features_per_pixels, color_img, depth_factor=1.0, downsampling_factor=10.0):
         fx = self.focal_lenght_x
         fy = self.focal_lenght_y
         cx = self.principal_point_x
         cy = self.principal_point_y
-        intrisics = [[fx, 0.0, cx],
-                     [0.0, fy, cy],
-                     [0.0, 0.0, 1.0 / depth_factor]]
-        intrisics = torch.tensor(list(intrisics), device='cuda').type(torch.float32)
-
+        #intrisics = [[fx, 0.0, cx],
+        #             [0.0, fy, cy],
+        #             [0.0, 0.0, 1.0 / depth_factor]]
+        #intrisics = torch.tensor(list(intrisics), device='cuda').type(torch.float32)
+        depth = torch.tensor(list(depth), device='cuda').type(torch.float32)
         # filter depth coords based on z distance
-        uu, vv = np.where((depth > 0.2) & (depth< 6.0))
-        coords = np.column_stack((uu, vv))  # pixel pairs vector
-        coords = np.concatenate((coords.astype(np.float32), np.expand_dims(depth[uu, vv], axis=1).astype(np.float32)), axis=1)
-        coords_torch = torch.tensor(list(coords), device='cuda')
-        xx, yy, zz = intrisics.inverse() @ coords_torch.T
+        uu, vv = torch.where((depth > 0.2) & (depth< 6.0))
+
+        # Shuffle and downsample depth pixels
+        coords = torch.stack((uu, vv), dim=1)  # pixel pairs vector
+        coords = coords[torch.randperm(coords.size()[0])]
+        coords = coords[:int(coords.size(dim=0)/downsampling_factor)]
+        uu = coords[:, 0]
+        vv = coords[:, 1]
+        xx = (vv - cx) * depth[uu, vv] / fx
+        yy = (uu - cy) * depth[uu, vv] / fy
+        zz = depth[uu, vv] / depth_factor
         # TODO combine features and colors in same var
+        uu, vv = uu.cpu().numpy(), vv.cpu().numpy()
         features = copy.deepcopy(features_per_pixels[0, :, uu, vv])
         color = color_img[uu, vv, :]
         # TODO clean memory
-        xx, yy, zz = xx.cpu().numpy(), yy.cpu().numpy(), zz.cpu().numpy()
-        pointcloud = np.concatenate((np.expand_dims(xx, 1), np.expand_dims(yy, 1), np.expand_dims(zz, 1)), axis=1)
+        pointcloud = torch.cat((xx.unsqueeze(1), yy.unsqueeze(1), zz.unsqueeze(1)), 1)
+        #xx, yy, zz = xx.cpu().numpy(), yy.cpu().numpy(), zz.cpu().numpy()
+        #coords = coords.cpu()
+        #pointcloud = np.concatenate((np.expand_dims(xx, 1), np.expand_dims(yy, 1), np.expand_dims(zz, 1)), axis=1)
+        #depth = depth.cpu().numpy()
+        pointcloud= pointcloud.cpu().numpy()
 
         return pointcloud, features, color
 
@@ -350,9 +362,13 @@ class VLMapBuilderROS(Node):
 
         #### Formatted PC with aligned features to pixel
         start = time.time()
-        featured_pc = self.project_depth_features_pc(depth, pix_feats, rgb, downsample_factor=20)
-        time_diff = time.time() - start
-        self.get_logger().info(f"Time for executing project_depth_features_pc: {time_diff}")
+        #featured_pc = self.project_depth_features_pc(depth, pix_feats, rgb, downsample_factor=20)
+        camera_pointcloud_xyz, features_per_point, color_per_point = self.project_depth_features_pc_torch(depth, pix_feats, rgb, downsampling_factor=20)
+        featured_pc = FeaturedPC()
+        featured_pc.points_xyz = copy.deepcopy(camera_pointcloud_xyz)
+        featured_pc.embeddings = copy.deepcopy(features_per_point)
+        featured_pc.rgb = copy.deepcopy(color_per_point)
+        self.get_logger().info(f"Time for executing project_depth_features_pc: {time.time() - start}")
 
         #projection = self.project_pc(rgb, featured_pc.points_xyz, depth_factor=1.)
         #cv2.imshow("projected_featuredPC", projection)
@@ -389,12 +405,9 @@ class VLMapBuilderROS(Node):
             max_bounds = torch.max(torch_grid, dim=0)[0]  # Maximum x, y, z of the camera pointcloud
             map_points = torch.tensor(self.grid_pos, device='cuda', dtype=torch.float32)
             map_mask = torch.all((map_points >= min_bounds) & (map_points <= max_bounds), dim=1)
-            #map_mask = (torch_grid.min(dim=0).values < torch.tensor(self.grid_pos, device='cuda')) & \
-            #            (torch.tensor(self.grid_pos, device='cuda')  < torch_grid.max(dim=0).values)
             map_points = map_points[map_mask]
-            #map_points = torch.tensor(self.grid_pos, device='cuda')[map_mask.all(dim=1)]
             self.get_logger().info(f"map points shape: {map_points.shape}")
-            #voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points)
+            # Raycast and find the voxels to remove
             voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_grid, torch_grid, map_points)).to(torch.int)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
             map_points = map_points.cpu()

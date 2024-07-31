@@ -15,7 +15,44 @@ def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray):
     voxel_grid_map = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size= 1.0)   #TODO parameterize
     o3d.visualization.draw_geometries([voxel_grid_map])
 
-
+def compute_point_cloud_difference(pcd_1, pcd_2, distance_threshold = 0.01):
+    """
+    Computes the difference between two point clouds and colors the difference points in red.
+    
+    Args:
+    pcd_1 (np.ndarray): The first point cloud.
+    pcd_2 (np.ndarray): The second point cloud.
+    distance_threshold (float): The distance threshold for determining point differences.
+    
+    Returns:
+    o3d.geometry.PointCloud: A point cloud containing points in pcd_1 that are not in pcd_2, colored in red.
+    """
+    # Convert point clouds to numpy arrays
+    points_1 = pcd_1
+    points_2 = pcd_2
+    pcd2_o3d = o3d.geometry.PointCloud()
+    pcd2_o3d.points = o3d.utility.Vector3dVector(pcd_2)
+    # Create a KDTree for the second point cloud
+    pcd_2_tree = o3d.geometry.KDTreeFlann(pcd2_o3d)
+    
+    # List to hold the points that are different
+    diff_points = []
+    
+    # Check each point in pcd_1
+    for point in points_1:
+        [_, idx, _] = pcd_2_tree.search_knn_vector_3d(point, 1)
+        if np.linalg.norm(points_2[idx[0]] - point) < distance_threshold:
+            diff_points.append(point)
+    
+    # Create a new point cloud with the different points
+    diff_pcd = o3d.geometry.PointCloud()
+    diff_pcd.points = o3d.utility.Vector3dVector(np.array(diff_points))
+    
+    # Color the different points in red
+    colors = np.array([[1, 0, 0] for _ in diff_points])  # RGB color for red
+    diff_pcd.colors = o3d.utility.Vector3dVector(colors)
+    
+    return diff_pcd
 
 def get_heatmap_from_mask_3d(
     pc: np.ndarray, mask: np.ndarray, cell_size: float = 0.05, decay_rate: float = 0.01
