@@ -64,7 +64,7 @@ def sampled_voxel_traversal(entry_pos, pc_grid, map):
 
     return crossed_voxels
 
-def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**11, distance_threshold = 0.9):
+def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**13, distance_threshold = 0.9):
     entry_pos = torch.tensor(list(entry_pos), device='cuda')        # torch.Size([3])
     #map = torch.tensor(list(map), device='cuda')                    # torch.size([1000000, 3])
     #occupied_map = torch.tensor(list(occupied_map), device='cuda')  # torch.size([1000, 1000, 50])
@@ -97,7 +97,7 @@ def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**11, distance_thre
     #points_to_remove = map[ray_mask_constrained]
     ##occupied_map[ray_mask_constrained] = -1
     #print (f"Loop: {time.time() - time_loop}")
-    dd = - (directive_parameters.to(torch.float32) @ map.T.to(torch.float32))
+    dd = - (directive_parameters.to(torch.float16) @ map.T.to(torch.float16))
     tt = - (dd + (directive_parameters * pc_grid).sum(dim=1, keepdims=True)) / torch.sum(torch.square(directive_parameters), dim=1, keepdims=True)
     projections = pc_grid.unsqueeze(1) + torch.bmm(directive_parameters.unsqueeze(-1), tt.unsqueeze(1)).permute([0, 2, 1])
     distances = (map.unsqueeze(0) - projections).norm(dim=-1, p=2)
@@ -123,6 +123,52 @@ def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**11, distance_thre
     # TODO free GPU
     return points_to_remove_matrix
 
+def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, distance_threshold = 0.9):
+    entry_pos = torch.tensor(entry_pos, device='cuda', dtype=torch.float32)
+    directive_parameters = pc_grid - entry_pos
+    directive_parameters = directive_parameters.to(torch.float32)
+
+    # Initialize crossed voxels mask
+    crossed_voxels = torch.zeros(map.shape[0], dtype=torch.bool, device="cuda")
+    map = map.to(torch.float32)
+
+    # Process in batches to reduce memory usage
+    for pc_start in range(0, pc_grid.shape[0], batch_size):
+
+        pc_end = min(pc_start + batch_size, pc_grid.shape[0])
+        pc_batch = pc_grid[pc_start:pc_end]
+        directive_batch = directive_parameters[pc_start:pc_end]
+
+        # Calculate the lines equations
+        dd = -(directive_batch @ map.T)
+        tt = -(dd + (directive_batch * pc_batch).sum(dim=1, keepdims=True)) / torch.sum(directive_batch**2, dim=1, keepdims=True)
+
+        # Calculate projections of each point of the camera pointcloud on each line
+        projections = pc_batch.unsqueeze(1) + torch.bmm(directive_batch.unsqueeze(-1), tt.unsqueeze(1)).permute(0, 2, 1)
+
+        # Calculate distances of each projection
+        distances = (map.unsqueeze(0) - projections).norm(dim=-1, p=2)
+
+        # Process map in smaller chunks to manage memory usage
+        for map_start in range(0, map.shape[0], batch_size):
+            map_end = min(map_start + batch_size, map.shape[0])
+            distances_chunk = distances[:, map_start:map_end]
+
+            # Distance condition of the points on the camera pointcloud
+            distance_cond = distances_chunk < distance_threshold
+
+            # Conditions for crossing
+            bigger_than_camera = ((map[map_start:map_end] - entry_pos).unsqueeze(0) * directive_batch.unsqueeze(1)).sum(dim=-1) > 0.0
+            smaller_than_pointcloud = ((map[map_start:map_end].unsqueeze(0) - pc_batch.unsqueeze(1)) * directive_batch.unsqueeze(1)).sum(dim=-1) < 0.0
+
+            # Combined mask
+            mask_chunk = (distance_cond & bigger_than_camera & smaller_than_pointcloud).any(dim=0)
+            crossed_voxels[map_start:map_end] |= mask_chunk
+
+    # Select the points to remove
+    points_to_remove_matrix = map[crossed_voxels]
+
+    return points_to_remove_matrix
 
 
 def traverse_pixels_torch(entry_pos, torch_grid, map):

@@ -354,7 +354,7 @@ def base_pos2grid_id_3d_torch(gs, cs, pointcloud):
     grid = torch.zeros_like(pointcloud)
     grid[:, :2] = (gs / 2 - (pointcloud[:, :2] / cs).to(torch.int))
     grid[:, 2] = (pointcloud[:, 2]/cs)
-    return grid.to(torch.int)
+    return grid.to(torch.float32)
 
 
 def base_pos2grid_id_3d_batch(gs, cs, pos_base_np):

@@ -281,25 +281,7 @@ class VLMapBuilderROS(Node):
         # TODO clean memory
         xx, yy, zz = xx.cpu().numpy(), yy.cpu().numpy(), zz.cpu().numpy()
         pointcloud = np.concatenate((np.expand_dims(xx, 1), np.expand_dims(yy, 1), np.expand_dims(zz, 1)), axis=1)
-        #np.random.shuffle(coords)   # I have all the pixels randomly shuffled
-        # Let's take only the number of pixels scaled by the downsample factor:
-        # Since we have shuffled the coordinates, we take the first N items
-        #downsampled_coords = coords[:np.round(len(coords)/downsample_factor, 0).astype(int)]
-        #feature_points_ls = np.empty([len(coords), 3], dtype=object)
-        #count = 0
-#
-        #for item in coords:
-        #    # TODO optimize iteration formulation
-        #    u = item[0]
-        #    v = item[1]
-        #    z = depth[u, v]
-        #    if (z > 0.2 and z<6.0): # filter depth based on Z TODO parameterize these thresholds
-        #        z = z / depth_factor
-        #        x = ((v - cx) * z) / fx
-        #        y = ((u - cy) * z) / fy
-        #        feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :]) # avoid memory re-allocation each loop iter
-        #        count += 1
-        #feature_points_ls.resize(count, refcheck=False)
+
         return pointcloud, features, color
 
     def sensors_callback(self, img_msg, depth_msg):
@@ -395,29 +377,30 @@ class VLMapBuilderROS(Node):
             map_to_cam_tf = np.linalg.inv(transform_np)
             cam_pose = map_to_cam_tf[0:3,-1]
             camera_pose_grid = base_pos2grid_id_3d(self.gs, self.cs, cam_pose[0], cam_pose[1], cam_pose[2])
-            start_pixel = raycast.Pixel(camera_pose_grid[0], camera_pose_grid[1], camera_pose_grid[2])  # unnecessary
-            torch_points = torch.tensor(featured_pc.points_xyz, device="cuda")
+
+            torch_points = torch.tensor(featured_pc.points_xyz, device="cuda", dtype=torch.float32)
             torch_grid = base_pos2grid_id_3d_torch(self.gs, self.cs, torch_points)
             # Filter points of the camera out of range
             mask = ~((torch_grid < (torch.zeros_like(torch_grid)) + (torch_grid > torch.tensor([self.gs, self.gs, self.vh], device="cuda"))).any(dim=1))
             torch_grid =  torch_grid[mask]
-            # Filter points on the map only in the bounding box of the camera pontcloud
             
-            map_mask = (torch_grid.min(dim=0).values < torch.tensor(self.grid_pos, device='cuda')) & \
-                        (torch.tensor(self.grid_pos, device='cuda')  < torch_grid.max(dim=0).values)
-            map_points = torch.tensor(self.grid_pos, device='cuda')[map_mask.all(dim=1)]
-            # raycast.traverse_pixels_torch(start_pixel, torch_grid)
-            #st = time.time()
-            #voxels_to_clear = raycast.sampled_voxel_traversal(camera_pose_grid, torch_grid, map_points)
-            #self.get_logger().info(f"Time for raycasting PC in map frame: {time.time() - st}")
-            voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points)
+            # Filter points on the map only in the bounding box of the camera pontcloud
+            min_bounds = torch.min(torch_grid, dim=0)[0]  # Minimum x, y, z of the camera pointcloud
+            max_bounds = torch.max(torch_grid, dim=0)[0]  # Maximum x, y, z of the camera pointcloud
+            map_points = torch.tensor(self.grid_pos, device='cuda', dtype=torch.float32)
+            map_mask = torch.all((map_points >= min_bounds) & (map_points <= max_bounds), dim=1)
+            #map_mask = (torch_grid.min(dim=0).values < torch.tensor(self.grid_pos, device='cuda')) & \
+            #            (torch.tensor(self.grid_pos, device='cuda')  < torch_grid.max(dim=0).values)
+            map_points = map_points[map_mask]
+            #map_points = torch.tensor(self.grid_pos, device='cuda')[map_mask.all(dim=1)]
+            self.get_logger().info(f"map points shape: {map_points.shape}")
+            #voxels_to_clear = raycast.raycast_map_torch(start_pixel, torch_grid, map_points)
+            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_grid, torch_grid, map_points)).to(torch.int)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
             map_points = map_points.cpu()
             #removed_points = map_points[voxels_to_clear]
-            # Free GPU? TODO
 
-            time_diff = time.time() - start_raycast
-            self.get_logger().info(f"Time for raycasting PC in map frame: {time_diff}")
+            self.get_logger().info(f"Time for raycasting PC in map frame: {time.time() - start_raycast}")
             self.get_logger().info(f"Voxels to remove: {voxels_to_clear.size}")
             #if voxels_to_clear.size != 0:
             #    pcd_clear = o3d.geometry.PointCloud()
@@ -432,7 +415,7 @@ class VLMapBuilderROS(Node):
                     self.grid_pos[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_pos[0], dtype=np.int32)
                     self.grid_rgb[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_rgb[0], dtype=np.uint8)
                     self.occupied_ids[voxel[0], voxel[1], voxel[2]] = -1
-                self.get_logger().info(f"Time for raycasting and REMOVING INDICES: {time.time() - time_map_raycast}")
+                self.get_logger().info(f"Time for REMOVING INDICES from map: {time.time() - time_map_raycast}")
 
         #### Map update TODO: separate it in another thread
         start = time.time()
