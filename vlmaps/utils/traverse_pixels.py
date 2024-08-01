@@ -123,7 +123,7 @@ def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**13, distance_thre
     # TODO free GPU
     return points_to_remove_matrix
 
-def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, distance_threshold = 0.9):
+def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, distance_threshold = 0.5, offset = 3.0):
     entry_pos = torch.tensor(entry_pos, device='cuda', dtype=torch.float32)
     directive_parameters = pc_grid - entry_pos
     directive_parameters = directive_parameters.to(torch.float32)
@@ -159,7 +159,7 @@ def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, dis
 
             # Conditions for crossing
             bigger_than_camera = ((map[map_start:map_end] - entry_pos).unsqueeze(0) * directive_batch.unsqueeze(1)).sum(dim=-1) > 0.0
-            smaller_than_pointcloud = ((map[map_start:map_end].unsqueeze(0) - pc_batch.unsqueeze(1)) * directive_batch.unsqueeze(1)).sum(dim=-1) < 0.0
+            smaller_than_pointcloud = ((map[map_start:map_end].unsqueeze(0) - (pc_batch - offset).unsqueeze(1)) * directive_batch.unsqueeze(1)).sum(dim=-1) < 0.0
 
             # Combined mask
             mask_chunk = (distance_cond & bigger_than_camera & smaller_than_pointcloud).any(dim=0)
@@ -171,53 +171,76 @@ def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, dis
     return points_to_remove_matrix
 
 
-def traverse_pixels_torch(entry_pos, torch_grid, map):
-    entry_pos = torch.tensor(list(entry_pos), device='cuda')
-    delta = torch.abs(torch_grid - entry_pos)
-    norm = torch.norm(delta.to(torch.float), p=2)
-    # assert not (delta == 0).any(), "Entry point and exit point are the same, returning"
-
-    tDelta = norm / delta
-
-    step = torch.where(entry_pos < torch_grid, -1, 1)
-
-    mask = torch_grid < entry_pos
-    tmax = torch.zeros_like(torch_grid)
-
-    tmax[mask] = abs((torch_grid - torch.floor(torch_grid)) * tDelta)
-    tmax[~mask] = abs((torch.ceil(torch_grid) - torch_grid) * tDelta)
-
-    n = torch.where(mask, entry_pos - torch_grid, torch_grid - entry_pos).sum(dim=1)
-
-    # if exit_pos.x < entry_pos.x:
-    #     stepX = -1
-    #     tmaxX = abs((entry_pos.x - np.floor(entry_pos.x)) * tDeltaX)
-    #     n += x - end_pixel.x
-    # elif exit_pos.x > entry_pos.x:
-    #     stepX = 1
-    #     tmaxX = abs((np.ceil(entry_pos.x) - entry_pos.x) * tDeltaX)
-    #     n += end_pixel.x - x
-
-    # # Y direction 
-    # if exit_pos.y < entry_pos.y:
-    #     stepY = -1
-    #     tmaxY = abs((entry_pos.y - np.floor(entry_pos.y)) * tDeltaY)
-    #     n += y - end_pixel.y
-    # elif exit_pos.y > entry_pos.y:
-    #     stepY = 1
-    #     tmaxY = abs((np.ceil(entry_pos.y) - entry_pos.y) * tDeltaY)
-    #     n += end_pixel.y - y
-
-    #### Parametric representation of a straight line in space:
-    # 
-    #
-    #
-    #
-
+def traverse_pixels_torch(entry_pos, exit_pos):
+    """
+    Traverse through a 3D grid of voxels in parallel using PyTorch tensors.
     
+    :param entry_pos: Tensor of shape (1, 3) with the entry position
+    :param exit_pos: Tensor of shape (N, 3) with exit positions for N rays
+    :return: List of lists of Pixels for each ray
+    """
+    assert entry_pos.shape == (1, 3)
+    assert exit_pos.shape[1] == 3
 
+    N = exit_pos.shape[0]
 
- 
+    # Broadcast entry position to match the shape of exit positions
+    entry_pos = entry_pos.expand(N, 3)
+
+    # Calculate direction vector and distances
+    direction = exit_pos - entry_pos
+    norm = torch.norm(direction, dim=1, keepdim=True)
+    direction = direction / norm
+
+    dx, dy, dz = torch.abs(direction[:, 0]), torch.abs(direction[:, 1]), torch.abs(direction[:, 2])
+
+    # Initialize steps and tDelta
+    stepX = torch.sign(direction[:, 0])
+    stepY = torch.sign(direction[:, 1])
+    stepZ = torch.sign(direction[:, 2])
+
+    tDeltaX = torch.where(dx == 0, torch.tensor(float('inf')), torch.reciprocal(dx))
+    tDeltaY = torch.where(dy == 0, torch.tensor(float('inf')), torch.reciprocal(dy))
+    tDeltaZ = torch.where(dz == 0, torch.tensor(float('inf')), torch.reciprocal(dz))
+
+    # Initialize tMax
+    tmaxX = torch.where(direction[:, 0] > 0,
+                        (torch.ceil(entry_pos[:, 0]) - entry_pos[:, 0]) * tDeltaX,
+                        (entry_pos[:, 0] - torch.floor(entry_pos[:, 0])) * tDeltaX)
+
+    tmaxY = torch.where(direction[:, 1] > 0,
+                        (torch.ceil(entry_pos[:, 1]) - entry_pos[:, 1]) * tDeltaY,
+                        (entry_pos[:, 1] - torch.floor(entry_pos[:, 1])) * tDeltaY)
+
+    tmaxZ = torch.where(direction[:, 2] > 0,
+                        (torch.ceil(entry_pos[:, 2]) - entry_pos[:, 2]) * tDeltaZ,
+                        (entry_pos[:, 2] - torch.floor(entry_pos[:, 2])) * tDeltaZ)
+
+    # Initialize current positions
+    current_pos = entry_pos.clone().int()
+
+    # Initialize lists to store traversed pixels
+    pixel_traversal = [[Pixel(current_pos[i, 0].item(), current_pos[i, 1].item(), current_pos[i, 2].item())] for i in range(N)]
+
+    while torch.any((current_pos != exit_pos.int()).any(dim=1)):
+        # Find the minimum tmax to determine the next voxel to traverse
+        mask_x = (tmaxX < tmaxY) & (tmaxX < tmaxZ)
+        mask_y = ~mask_x & (tmaxY < tmaxZ)
+        mask_z = ~mask_x & ~mask_y
+
+        tmaxX += mask_x.float() * tDeltaX
+        tmaxY += mask_y.float() * tDeltaY
+        tmaxZ += mask_z.float() * tDeltaZ
+
+        current_pos[:, 0] += mask_x.int() * stepX.int()
+        current_pos[:, 1] += mask_y.int() * stepY.int()
+        current_pos[:, 2] += mask_z.int() * stepZ.int()
+
+        for i in range(N):
+            pixel_traversal[i].append(Pixel(current_pos[i, 0].item(), current_pos[i, 1].item(), current_pos[i, 2].item()))
+
+    return pixel_traversal
+
 def traverse_pixels(entry_pos, exit_pos):
     """
     Ray equation describes a point t along its trajectory:
@@ -371,20 +394,10 @@ def traverse_pixels(entry_pos, exit_pos):
             else:
                 z += stepZ
                 tmaxZ += tDeltaZ
-        ## 2D case
-        #if tmaxX < tmaxY:
-        #    tmaxX += tDeltaX
-        #    x += stepX
-        #elif tmaxX > tmaxY:
-        #    tmaxY += tDeltaY
-        #    y += stepY
-        #else:
-        #    x += stepX
-        #    y += stepY
         
         line.append(Pixel(x,y,z))
         
-    return line  
+    return line
   
 if __name__ == '__main__':
     start = Point(np.random.uniform(-7,7), np.random.uniform(-7,7), np.random.uniform(-7,7))

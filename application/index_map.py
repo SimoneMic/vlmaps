@@ -27,8 +27,8 @@ def main(config: DictConfig) -> None:
     data_dirs = "~/vlmaps"
     vlmap = VLMap(config.map_config, data_dir=data_dirs[config.scene_id])
     #vlmap.load_map(data_dirs[config.scene_id])
-    vlmap.load_map("/home/ergocub")
-    visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb)
+    vlmap.load_map("/home/ergocub/vlmaps.h5df")
+    visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb, "vlmaps")
     cat = input("What is your interested category in this scene?")
     # cat = "chair"
 
@@ -48,11 +48,11 @@ def main(config: DictConfig) -> None:
         heatmap = get_heatmap_from_mask_2d(mask_2d, cell_size=config.params.cs, decay_rate=config.decay_rate)
         visualize_heatmap_2d(rgb_2d, heatmap)
     else:
-        visualize_masked_map_3d(vlmap.grid_pos, mask, vlmap.grid_rgb)
+        visualize_masked_map_3d(vlmap.grid_pos, mask, vlmap.grid_rgb, "vlmaps interest")
         heatmap = get_heatmap_from_mask_3d(
             vlmap.grid_pos, mask, cell_size=config.params.cs, decay_rate=config.decay_rate
         )
-        visualize_heatmap_3d(vlmap.grid_pos, heatmap, vlmap.grid_rgb)
+        visualize_heatmap_3d(vlmap.grid_pos, heatmap, vlmap.grid_rgb, "vlmaps heatmap")
 
 
 if __name__ == "__main__":

@@ -7,21 +7,22 @@ from multiprocessing import Process
 
 class Visualizer(Process):
 
-    def __init__(self, pcd: o3d.geometry.PointCloud):
+    def __init__(self, pcd: o3d.geometry.PointCloud, name: str):
         super().__init__() 
         self.pcd = pcd
+        self.name = name
 
     def run(self):
-        o3d.visualization.draw_geometries_with_vertex_selection([self.pcd])
+        o3d.visualization.draw_geometries_with_vertex_selection([self.pcd], window_name=self.name)
 
-def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray, voxel_size=1.0):
+def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray, window_name: str, voxel_size=1.0):
     grid_rgb = rgb / 255.0
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pc)
     pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
     # visualize the point cloud
-    Visualizer(pcd).start()
+    Visualizer(pcd, window_name).start()
 
 def compute_point_cloud_difference(pcd_1, pcd_2, distance_threshold = 0.01):
     """
@@ -90,12 +91,12 @@ def visualize_masked_map_3d(pc: np.ndarray, mask: np.ndarray, rgb: np.ndarray, t
     visualize_heatmap_3d(pc, heatmap, rgb, transparency)
 
 
-def visualize_heatmap_3d(pc: np.ndarray, heatmap: np.ndarray, rgb: np.ndarray, transparency: float = 0.5):
+def visualize_heatmap_3d(pc: np.ndarray, heatmap: np.ndarray, rgb: np.ndarray, window_name: str = "heatmap 3d", transparency: float = 0.5):
     sim_new = (heatmap * 255).astype(np.uint8)
     heat = cv2.applyColorMap(sim_new, cv2.COLORMAP_JET)
     heat = heat.reshape(-1, 3)[:, ::-1].astype(np.float32)
     heat_rgb = heat * transparency + rgb * (1 - transparency)
-    visualize_rgb_map_3d(pc, heat_rgb)
+    visualize_rgb_map_3d(pc, heat_rgb, window_name)
 
 
 def pool_3d_label_to_2d(mask_3d: np.ndarray, grid_pos: np.ndarray, gs: int) -> np.ndarray:

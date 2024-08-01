@@ -26,8 +26,8 @@ def main(config: DictConfig) -> None:
     #thread_std.start()
     #thread_ray = threading.Thread(target=visualize_rgb_map_3d, args=(vlmap_raytrace.grid_pos, vlmap_raytrace.grid_rgb))
     #thread_ray.start()
-    visualize_rgb_map_3d(vlmap_std.grid_pos, vlmap_std.grid_rgb)
-    visualize_rgb_map_3d(vlmap_raytrace.grid_pos, vlmap_raytrace.grid_rgb)
+    visualize_rgb_map_3d(vlmap_std.grid_pos, vlmap_std.grid_rgb, "vlmap_std")
+    visualize_rgb_map_3d(vlmap_raytrace.grid_pos, vlmap_raytrace.grid_rgb, "vlmap_raytrace")
     diff = compute_point_cloud_difference(vlmap_std.grid_pos, vlmap_raytrace.grid_pos)
     o3d.visualization.draw_geometries_with_vertex_selection([diff])
     voxel_grid_map = o3d.geometry.VoxelGrid.create_from_point_cloud(diff, voxel_size= 1.0)   #TODO parameterize

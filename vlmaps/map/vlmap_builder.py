@@ -172,7 +172,7 @@ class VLMapBuilderROS(Node):
         self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
         self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
-        self.use_raycast = False
+        self.use_raycast = True
     
     def project_pc(self, rgb, points, depth_factor=1.):
         k = np.eye(3)
