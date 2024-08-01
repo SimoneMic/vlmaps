@@ -170,6 +170,14 @@ def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, dis
 
     return points_to_remove_matrix
 
+#class Pixel:
+#    def __init__(self, x, y, z):
+#        self.x = x
+#        self.y = y
+#        self.z = z
+#
+#    def __repr__(self):
+#        return f"Pixel(x={self.x}, y={self.y}, z={self.z})"
 
 def traverse_pixels_torch(entry_pos, exit_pos):
     """
@@ -179,8 +187,8 @@ def traverse_pixels_torch(entry_pos, exit_pos):
     :param exit_pos: Tensor of shape (N, 3) with exit positions for N rays
     :return: List of lists of Pixels for each ray
     """
-    assert entry_pos.shape == (1, 3)
-    assert exit_pos.shape[1] == 3
+    #assert entry_pos.shape == (1, 3)
+    #assert exit_pos.shape[1] == 3
 
     N = exit_pos.shape[0]
 
@@ -189,21 +197,32 @@ def traverse_pixels_torch(entry_pos, exit_pos):
 
     # Calculate direction vector and distances
     direction = exit_pos - entry_pos
-    norm = torch.norm(direction, dim=1, keepdim=True)
-    direction = direction / norm
+    norm = torch.norm(direction, dim=1, keepdim=False)
+    #direction = direction / norm
 
     dx, dy, dz = torch.abs(direction[:, 0]), torch.abs(direction[:, 1]), torch.abs(direction[:, 2])
 
-    # Initialize steps and tDelta
+    # Check where dx, dy or dz are == 0
+    mask_dx0 = dx == 0
+    mask_dy0 = dy == 0
+    mask_dz0 = dz == 0
+
+    # Init steps    (general case with dx!=dy!=dz!=0)
     stepX = torch.sign(direction[:, 0])
     stepY = torch.sign(direction[:, 1])
     stepZ = torch.sign(direction[:, 2])
 
-    tDeltaX = torch.where(dx == 0, torch.tensor(float('inf')), torch.reciprocal(dx))
-    tDeltaY = torch.where(dy == 0, torch.tensor(float('inf')), torch.reciprocal(dy))
-    tDeltaZ = torch.where(dz == 0, torch.tensor(float('inf')), torch.reciprocal(dz))
+    # Based on the masks set to 0 the relative steps
+    stepX[mask_dx0] = 0
+    stepY[mask_dy0] = 0
+    stepZ[mask_dz0] = 0
 
-    # Initialize tMax
+    # Init tDelta   (general case with dx!=dy!=dz!=0 or when a single one is dx)
+    tDeltaX = torch.where(dx == 0, torch.tensor(float('inf'), device='cuda'), norm/dx)
+    tDeltaY = torch.where(dy == 0, torch.tensor(float('inf'), device='cuda'), norm/dy)
+    tDeltaZ = torch.where(dz == 0, torch.tensor(float('inf'), device='cuda'), norm/dz)
+
+    # init tmax     (general case with dx!=dy!=dz!=0)
     tmaxX = torch.where(direction[:, 0] > 0,
                         (torch.ceil(entry_pos[:, 0]) - entry_pos[:, 0]) * tDeltaX,
                         (entry_pos[:, 0] - torch.floor(entry_pos[:, 0])) * tDeltaX)
@@ -215,18 +234,28 @@ def traverse_pixels_torch(entry_pos, exit_pos):
     tmaxZ = torch.where(direction[:, 2] > 0,
                         (torch.ceil(entry_pos[:, 2]) - entry_pos[:, 2]) * tDeltaZ,
                         (entry_pos[:, 2] - torch.floor(entry_pos[:, 2])) * tDeltaZ)
+    
+    tmaxX[mask_dx0] = float('inf')
+    tmaxY[mask_dy0] = float('inf')
+    tmaxZ[mask_dz0] = float('inf')
+
+    # How many iterations I have to do for each line
+    iterations = torch.zeros(N, dtype=torch.int, device="cuda")
+    iterations += dx.int() + dy.int() + dz.int()    #we have truncation here, is it correrct?
 
     # Initialize current positions
     current_pos = entry_pos.clone().int()
 
     # Initialize lists to store traversed pixels
-    pixel_traversal = [[Pixel(current_pos[i, 0].item(), current_pos[i, 1].item(), current_pos[i, 2].item())] for i in range(N)]
+    pixel_traversal = torch.zeros((iterations.sum(), 3))
 
-    while torch.any((current_pos != exit_pos.int()).any(dim=1)):
-        # Find the minimum tmax to determine the next voxel to traverse
-        mask_x = (tmaxX < tmaxY) & (tmaxX < tmaxZ)
-        mask_y = ~mask_x & (tmaxY < tmaxZ)
-        mask_z = ~mask_x & ~mask_y
+    # Initialize mask to keep track of rays that haven't reached their exit positions
+    active_mask = torch.ones(N, dtype=torch.bool, device='cuda')
+    count = 0
+    for _ in range(torch.max(iterations)) :
+        mask_x = (tmaxX <= tmaxY) & (tmaxX <= tmaxZ) & active_mask
+        mask_y = (tmaxY < tmaxX) & (tmaxY <= tmaxZ) & active_mask
+        mask_z = (tmaxZ < tmaxX) & (tmaxZ < tmaxY) & active_mask
 
         tmaxX += mask_x.float() * tDeltaX
         tmaxY += mask_y.float() * tDeltaY
@@ -236,10 +265,18 @@ def traverse_pixels_torch(entry_pos, exit_pos):
         current_pos[:, 1] += mask_y.int() * stepY.int()
         current_pos[:, 2] += mask_z.int() * stepZ.int()
 
-        for i in range(N):
-            pixel_traversal[i].append(Pixel(current_pos[i, 0].item(), current_pos[i, 1].item(), current_pos[i, 2].item()))
+        # Collect active current positions
+        active_indices = torch.nonzero(active_mask, as_tuple=True)[0]
+        active_positions = current_pos[active_indices]
+        for i in range(active_positions.shape[0]):
+            pixel_traversal[count] = current_pos[i]
+            count +=1
 
+        # Update the active mask
+        active_mask = ((current_pos - exit_pos.int()) < 1.0).any(dim=1)
+        
     return pixel_traversal
+
 
 def traverse_pixels(entry_pos, exit_pos):
     """
@@ -293,7 +330,7 @@ def traverse_pixels(entry_pos, exit_pos):
         if dz == 0:
             stepZ = 0
             tDeltaZ = np.inf
-            tDeltaZ = dy
+            tDeltaY = dy
         elif dy == 0:
             stepY = 0
             tDeltaX = dx

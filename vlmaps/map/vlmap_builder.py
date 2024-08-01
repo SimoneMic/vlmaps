@@ -407,6 +407,15 @@ class VLMapBuilderROS(Node):
             map_mask = torch.all((map_points >= min_bounds) & (map_points <= max_bounds), dim=1)
             map_points = map_points[map_mask]
             self.get_logger().info(f"map points shape: {map_points.shape}")
+
+            camera_pose_grid_troch = torch.tensor(camera_pose_grid, device='cuda', dtype=torch.float32)
+            voxels_to_clear = (raycast.traverse_pixels_torch(camera_pose_grid_troch, torch_grid)).to(torch.int)
+            voxels_to_clear = voxels_to_clear.cpu().numpy()
+            if len(voxels_to_clear) != 0:
+                pcd_clear = o3d.geometry.PointCloud()
+                pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
+                o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
+            return                
             # Raycast and find the voxels to remove
             voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_grid, torch_grid, map_points)).to(torch.int)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
