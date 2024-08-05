@@ -31,4 +31,18 @@ obstacle_names:
   - "window"
   - "stairs"
   - "other"
+labels:
+  - "other"
+  - "screen"
+  - "table"
+  - "closet"
+  - "chair"
+  - "shelf"
+  - "door"
+  - "wall"
+  - "ceiling"
+  - "floor"
+  - "human"
+classes_to_skip:
+  - "human"
 categories: "mp3d" # "mp3d", "ai2thor"

@@ -15,8 +15,6 @@ import open3d as o3d
 import time
 from geometry_msgs.msg import PoseWithCovarianceStamped
 
-from vlmaps.utils.clip_utils import get_text_feats
-
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
     load_3d_map,
@@ -74,7 +72,7 @@ def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry
         ), dtype=np.float64)
 
 class FeturedPoint:
-    def __init__(self, point, embedding, rgb, category_pred) -> None:
+    def __init__(self, point, embedding, rgb, category_pred=-1) -> None:
         self.point_xyz = point
         self.embedding = embedding
         self.categoy_pred = category_pred
@@ -106,6 +104,12 @@ class VLMapBuilderROS(Node):
         self.map_config = map_config
         self.amcl_cov = np.full([36], 0.2)  #init with an high covariance value for each element
         # tf buffer init
+        classes_to_skip = self.map_config.get("classes_to_skip")
+        self.get_preds = False
+        self.inds_to_remove = []
+        if classes_to_skip is not None and len(classes_to_skip) > 0:
+            self.inds_to_remove = [self.map_config["labels"].index(x) for x in classes_to_skip]
+            self.get_preds = True
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         # subscribers init with callback
@@ -245,7 +249,10 @@ class VLMapBuilderROS(Node):
                 z = z / depth_factor
                 x = ((v - cx) * z) / fx
                 y = ((u - cy) * z) / fy
-                feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :], category_preds[u, v]) # avoid memory re-allocation each loop iter
+                if category_preds is not None:
+                    feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :], category_preds[u, v]) # avoid memory re-allocation each loop iter
+                else:
+                    feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :])
                 count += 1
         feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)
@@ -294,7 +301,7 @@ class VLMapBuilderROS(Node):
         # get pixel-aligned LSeg features
         start = time.time()
         pix_feats, category_preds = get_lseg_feat(
-            self.lseg_model, rgb, ["other", "screen", "table", "closet", "chair", "shelf", "door", "wall", "ceiling", "floor", "human"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, get_preds=True
+            self.lseg_model, rgb, self.map_config["labels"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, get_preds=self.get_preds
         )
         time_diff = time.time() - start
         self.get_logger().info(f"lseg features extracted in: {time_diff}")
@@ -338,8 +345,7 @@ class VLMapBuilderROS(Node):
         for (point, feature, rgb, category_pred) in zip(featured_pc.points_xyz, featured_pc.embeddings, featured_pc.rgb, featured_pc.category_preds):
             
             row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
-            if self._out_of_range(row, col, height, self.gs, self.vh) or category_pred == 10:
-                #self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
+            if self._out_of_range(row, col, height, self.gs, self.vh) or category_pred in self.inds_to_remove:
                 continue
 
             # when the max_id exceeds the reserved size,
