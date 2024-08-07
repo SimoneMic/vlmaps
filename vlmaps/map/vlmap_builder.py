@@ -172,7 +172,9 @@ class VLMapBuilderROS(Node):
         self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
         self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
+        # TODO: add to config file
         self.use_raycast = True
+        self.raycasting_algorythm = "distance_based"       # voxel_traversal
     
     def project_pc(self, rgb, points, depth_factor=1.):
         k = np.eye(3)
@@ -385,66 +387,14 @@ class VLMapBuilderROS(Node):
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
 
 
-        #### Raycast TODO combine with main loop to save computational effort
-        # Camera position in grid
+        #### Raycast TODO: move it in a separate thread
         if ((self.frame_i != 0) or (self.loaded_map == True)) and self.use_raycast:
-            start_raycast = time.time()
 
             map_to_cam_tf = np.linalg.inv(transform_np)
             cam_pose = map_to_cam_tf[0:3,-1]
-            camera_pose_grid = base_pos2grid_id_3d(self.gs, self.cs, cam_pose[0], cam_pose[1], cam_pose[2])
+            voxels_to_clear = self.raycasting(cam_pose, featured_pc.points_xyz)
+            self.remove_map_voxels(voxels_to_clear)
 
-            torch_points = torch.tensor(featured_pc.points_xyz, device="cuda", dtype=torch.float32)
-            torch_grid = base_pos2grid_id_3d_torch(self.gs, self.cs, torch_points)
-            # Filter points of the camera out of range
-            mask = ~((torch_grid < (torch.zeros_like(torch_grid)) + (torch_grid > torch.tensor([self.gs, self.gs, self.vh], device="cuda"))).any(dim=1))
-            torch_grid =  torch_grid[mask]
-            
-            # Filter points on the map only in the bounding box of the camera pontcloud
-            min_bounds = torch.min(torch_grid, dim=0)[0]  # Minimum x, y, z of the camera pointcloud
-            max_bounds = torch.max(torch_grid, dim=0)[0]  # Maximum x, y, z of the camera pointcloud
-            map_points = torch.tensor(self.grid_pos, device='cuda', dtype=torch.float32)
-            map_mask = torch.all((map_points >= min_bounds) & (map_points <= max_bounds), dim=1)
-            map_points = map_points[map_mask]
-            self.get_logger().info(f"map points shape: {map_points.shape}")
-
-            camera_pose_grid_troch = torch.tensor(camera_pose_grid, device='cuda', dtype=torch.float32)
-            voxels_to_clear = (raycast.traverse_pixels_torch(camera_pose_grid_troch, torch_grid)).to(torch.int)
-            voxels_to_clear = voxels_to_clear.cpu().numpy()
-            self.get_logger().info(f"Time for raycasting PC in map frame: {time.time() - start_raycast}")
-            if len(voxels_to_clear) != 0:
-                pcd_clear = o3d.geometry.PointCloud()
-                pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
-                colors = np.array([[1, 0, 0] for _ in pcd_clear.points])  # RGB color for red
-                pcd_clear.colors = o3d.utility.Vector3dVector(colors)
-                pcd_cloud = o3d.geometry.PointCloud()
-                pcd_cloud.points = o3d.utility.Vector3dVector(torch_grid.cpu().numpy())
-                colors = np.array([[0, 1, 0] for _ in pcd_cloud.points])  # RGB color for green
-                pcd_cloud.colors = o3d.utility.Vector3dVector(colors)
-                o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear + pcd_cloud])
-            return                
-            # Raycast and find the voxels to remove
-            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_grid, torch_grid, map_points)).to(torch.int)
-            voxels_to_clear = voxels_to_clear.cpu().numpy()
-            map_points = map_points.cpu()
-            #removed_points = map_points[voxels_to_clear]
-
-            self.get_logger().info(f"Time for raycasting PC in map frame: {time.time() - start_raycast}")
-            self.get_logger().info(f"Voxels to remove: {voxels_to_clear.size}")
-            #if voxels_to_clear.size != 0:
-            #    pcd_clear = o3d.geometry.PointCloud()
-            #    pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
-            #    o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
-            
-            # Remove voxels from map:
-            if voxels_to_clear.size != 0:
-                time_map_raycast = time.time()
-                for voxel in voxels_to_clear:
-                    self.grid_feat[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_feat[0], dtype=np.float32)    # TODO parameterize also the type?
-                    self.grid_pos[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_pos[0], dtype=np.int32)
-                    self.grid_rgb[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_rgb[0], dtype=np.uint8)
-                    self.occupied_ids[voxel[0], voxel[1], voxel[2]] = -1
-                self.get_logger().info(f"Time for REMOVING INDICES from map: {time.time() - time_map_raycast}")
 
         #### Map update TODO: separate it in another thread
         start = time.time()
@@ -486,10 +436,8 @@ class VLMapBuilderROS(Node):
                 )
                 self.weight[occupied_id] += alpha
         
-        time_diff = time.time() - start
-        self.get_logger().info(f"Time for updating Map: {time_diff}")
-        end_loop_time = time.time() - loop_timer
-        self.get_logger().info(f"CALLBACK TIME: {end_loop_time}")
+        self.get_logger().info(f"Time for updating Map: {time.time() - start}")
+        self.get_logger().info(f"CALLBACK TIME: {time.time() - loop_timer}")
         # Save map each X callbacks TODO prameterize and do it in a separate thread
         #if self.frame_i % 10 == 0:
         self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
@@ -503,41 +451,92 @@ class VLMapBuilderROS(Node):
         return
 
     # Let's do this in background on a separate thread, global_pc should not be already added
-    def raycasting(self, global_pc, tf_map2depth, depth_img, rgb_img):
+    def raycasting(self, camera_pose: np.ndarray, camera_cloud: np.ndarray):
+        """
+        :param camera_pose: array of shape (1, 3) with the camera pose expressed in the map frame
+        :param camera_cloud: array of shape (N, 3) with the points extracted from the camera depth, expressed in the map frame
+        :return: List of lists of voxels to remove from the map
+        """
         start = time.time()
-        #### Transform the global map in the depth frame:
-        map_pcd = o3d.geometry.PointCloud()
-        map_pcd.points = o3d.utility.Vector3dVector(self.grid_pos[:])
-        map_pcd.colors = o3d.utility.Vector3dVector(self.grid_rgb / 255)
-        #o3d.visualization.draw_geometries_with_vertex_selection([map_pcd])
-        map_pc_local_frame = map_pcd.transform(tf_map2depth)
-        #o3d.visualization.draw_geometries_with_vertex_selection([map_pc_local_frame])
+        # Pass to tensors
+        camera_pose_voxel = base_pos2grid_id_3d(self.gs, self.cs, camera_pose[0], camera_pose[1], camera_pose[2])
+        camera_pose_voxel_troch = torch.tensor(camera_pose_voxel, device='cuda', dtype=torch.float32)
+        cam_pointcloud_torch = torch.tensor(camera_cloud, device="cuda", dtype=torch.float32)
+        cam_voxels_torch = base_pos2grid_id_3d_torch(self.gs, self.cs, cam_pointcloud_torch)
+        # Filter points of the camera out of range
+        mask = ((cam_voxels_torch > (torch.zeros_like(cam_voxels_torch))) & (cam_voxels_torch < torch.tensor([self.gs, self.gs, self.vh], device="cuda"))).all(dim=1)
+        cam_voxels_torch =  cam_voxels_torch[mask]
 
-        print('voxelization')
-        voxel_grid_map = o3d.geometry.VoxelGrid.create_from_point_cloud(map_pcd, voxel_size= 1.0)   #TODO parameterize
-        o3d.visualization.draw_geometries([voxel_grid_map])
-        #### VoxelBlockGrid computation
+        if self.raycasting_algorythm == "voxel_traversal":
+            voxels_to_clear = (raycast.traverse_pixels_torch(camera_pose_voxel_troch, cam_voxels_torch)).to(torch.int)
+            voxels_to_clear = voxels_to_clear.cpu().numpy()
+            # Find unique voxels:
+            voxels_to_clear = np.unique(voxels_to_clear, axis=0)
+            #if len(voxels_to_clear) != 0:
+            #    pcd_clear = o3d.geometry.PointCloud()
+            #    pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
+            #    colors = np.array([[1, 0, 0] for _ in pcd_clear.points])  # RGB color for red
+            #    pcd_clear.colors = o3d.utility.Vector3dVector(colors)
+            #    pcd_cloud = o3d.geometry.PointCloud()
+            #    pcd_cloud.points = o3d.utility.Vector3dVector(cam_voxels_torch.cpu().numpy())
+            #    colors = np.array([[0, 1, 0] for _ in pcd_cloud.points])  # RGB color for green
+            #    pcd_cloud.colors = o3d.utility.Vector3dVector(colors)
+            #    o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear + pcd_cloud])
+        elif self.raycasting_algorythm == "distance_based":
+            # Filter points on the map only in the bounding box of the camera pontcloud
+            min_bounds = torch.min(cam_voxels_torch, dim=0)[0]  # Minimum x, y, z of the camera pointcloud
+            max_bounds = torch.max(cam_voxels_torch, dim=0)[0]  # Maximum x, y, z of the camera pointcloud
+            map_points = torch.tensor(self.grid_pos, device='cuda', dtype=torch.float32)
+            map_mask = torch.all((map_points >= min_bounds) & (map_points <= max_bounds), dim=1)
+            map_points = map_points[map_mask]
+            #self.get_logger().info(f"map points shape: {map_points.shape}")
+
+            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, cam_voxels_torch, map_points)).to(torch.int)
+            voxels_to_clear = voxels_to_clear.cpu().numpy()
+        else:   # distance based approach
+            # Filter points on the map only in the bounding box of the camera pontcloud
+            min_bounds = torch.min(cam_voxels_torch, dim=0)[0]  # Minimum x, y, z of the camera pointcloud
+            max_bounds = torch.max(cam_voxels_torch, dim=0)[0]  # Maximum x, y, z of the camera pointcloud
+            map_points = torch.tensor(self.grid_pos, device='cuda', dtype=torch.float32)
+            map_mask = torch.all((map_points >= min_bounds) & (map_points <= max_bounds), dim=1)
+            map_points = map_points[map_mask]
+            #self.get_logger().info(f"map points shape: {map_points.shape}")
+
+            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, cam_voxels_torch, map_points)).to(torch.int)
+            voxels_to_clear = voxels_to_clear.cpu().numpy()
         
-        depth_as_img = o3d.t.geometry.Image(o3d.core.Tensor((depth_img).astype(np.float32)))
-        #color_as_img = o3d.t.geometry.Image(o3d.core.Tensor((rgb_img).astype(np.float32)))
+        self.get_logger().info(f"Time for raycasting: {time.time() - start}")
+        return voxels_to_clear
 
-        extrinsic = o3d.core.Tensor(tf_map2depth.astype(np.float64))
-        depth_intrinsic = o3d.core.Tensor(self.calib_mat.astype(np.float64))
-        depth_max = 6.0
-        depth_scale = 1.0
-        # Integration
-        frustum_block_coords = self.vbg.compute_unique_block_coordinates(
-            depth_as_img, depth_intrinsic, extrinsic, depth_scale,
-            depth_max)    # TODO parameterize
-        self.vbg.integrate(frustum_block_coords, depth_as_img, depth_intrinsic,
-                          extrinsic, depth_scale,
-                          depth_max)
-        # Visualize
-        pcd = self.vbg.extract_point_cloud()
-        o3d.visualization.draw_geometries([pcd])
 
-        time_diff = time.time() - start
-        self.get_logger().info(f"Time for raycasting: {time_diff}")
+    def remove_map_voxels(self, voxels_to_clear):
+        """
+        :param voxels_to_clear: array of shape (N, 3) with the voxels in the global grid map frame to be removed from self.occupied_ids
+        :return: True or False upon completion
+        """
+        # TODO add try catch
+        if voxels_to_clear.size != 0:
+                time_start = time.time()
+                for voxel in voxels_to_clear:
+                    # Check if in range
+                    if self._out_of_range(voxel[0], voxel[1], voxel[2], self.gs, self.vh):
+                        continue
+                    # Check if voxel is already mapped:
+                    if self.occupied_ids[voxel[0], voxel[1], voxel[2]] > 0:
+                        self.grid_feat[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_feat[0], dtype=np.float32)    # TODO parameterize also the type?
+                        self.grid_pos[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_pos[0], dtype=np.int32)
+                        self.grid_rgb[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_rgb[0], dtype=np.uint8)
+                        self.occupied_ids[voxel[0], voxel[1], voxel[2]] = -1
+                self.get_logger().info(f"Time for REMOVING INDICES from map: {time.time() - time_start}")
+        #if voxels_to_clear.size != 0:
+        #        time_map_raycast = time.time()
+        #        for voxel in voxels_to_clear:
+        #            self.grid_feat[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_feat[0], dtype=np.float32)    # TODO parameterize also the type?
+        #            self.grid_pos[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_pos[0], dtype=np.int32)
+        #            self.grid_rgb[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_rgb[0], dtype=np.uint8)
+        #            self.occupied_ids[voxel[0], voxel[1], voxel[2]] = -1
+        #        self.get_logger().info(f"Time for REMOVING INDICES from map: {time.time() - time_map_raycast}")
+        return True
 
     # Simply store the covariance values, will be analyze
     def amcl_callback(self, msg):

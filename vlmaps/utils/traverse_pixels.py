@@ -124,7 +124,7 @@ def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**13, distance_thre
     return points_to_remove_matrix
 
 def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, distance_threshold = 0.5, offset = 3.0):
-    entry_pos = torch.tensor(entry_pos, device='cuda', dtype=torch.float32)
+    #entry_pos = torch.tensor(entry_pos, device='cuda', dtype=torch.float32)
     directive_parameters = pc_grid - entry_pos
     directive_parameters = directive_parameters.to(torch.float32)
 
