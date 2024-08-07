@@ -247,33 +247,36 @@ def traverse_pixels_torch(entry_pos, exit_pos):
     current_pos = entry_pos.clone().int()
 
     # Initialize lists to store traversed pixels
-    pixel_traversal = torch.zeros((iterations.sum(), 3))
+    pixel_traversal = torch.empty([0,3], device="cuda")    #  torch.zeros((iterations.sum(), 3))
 
     # Initialize mask to keep track of rays that haven't reached their exit positions
     active_mask = torch.ones(N, dtype=torch.bool, device='cuda')
-    count = 0
     for _ in range(torch.max(iterations)) :
-        mask_x = (tmaxX <= tmaxY) & (tmaxX <= tmaxZ) & active_mask
-        mask_y = (tmaxY < tmaxX) & (tmaxY <= tmaxZ) & active_mask
-        mask_z = (tmaxZ < tmaxX) & (tmaxZ < tmaxY) & active_mask
+        mask_x = (tmaxX < tmaxY) & (tmaxX < tmaxZ) & active_mask
+        mask_y = (tmaxY <= tmaxX) & (tmaxY < tmaxZ) & active_mask
+        mask_z = (tmaxZ <= tmaxX) & (tmaxZ <= tmaxY) & active_mask
 
-        tmaxX += mask_x.float() * tDeltaX
-        tmaxY += mask_y.float() * tDeltaY
-        tmaxZ += mask_z.float() * tDeltaZ
+        # TODO: do a mask for equal tmax pairs
+        # mask_x_equals = ((tmaxX == tmaxY) | (tmaxX == tmaxZ)) & active_mask
+        # mask_y_equals = ((tmaxY == tmaxX) | (tmaxY == tmaxZ)) & active_mask
+        # mask_z_equals = ((tmaxZ == tmaxX) | (tmaxZ == tmaxY)) & active_mask
 
-        current_pos[:, 0] += mask_x.int() * stepX.int()
-        current_pos[:, 1] += mask_y.int() * stepY.int()
-        current_pos[:, 2] += mask_z.int() * stepZ.int()
+        tmaxX += mask_x.int() * tDeltaX
+        tmaxY += mask_y.int() * tDeltaY
+        tmaxZ += mask_z.int() * tDeltaZ
+
+        current_pos[:, 0] += (mask_x).int() * stepX.int()
+        current_pos[:, 1] += (mask_y).int() * stepY.int()
+        current_pos[:, 2] += (mask_z).int() * stepZ.int()
 
         # Collect active current positions
-        active_indices = torch.nonzero(active_mask, as_tuple=True)[0]
-        active_positions = current_pos[active_indices]
-        for i in range(active_positions.shape[0]):
-            pixel_traversal[count] = current_pos[i]
-            count +=1
+        #active_indices = torch.nonzero(active_mask, as_tuple=True)[0]
+        #active_positions = current_pos[active_indices]
+        
+        pixel_traversal = torch.cat((pixel_traversal, current_pos[torch.nonzero(active_mask, as_tuple=True)[0]]), dim=0)
 
         # Update the active mask
-        active_mask = ((current_pos - exit_pos.int()) < 1.0).any(dim=1)
+        active_mask = (abs(current_pos - exit_pos.int()) > 2.0).any(dim=1)
         
     return pixel_traversal
 

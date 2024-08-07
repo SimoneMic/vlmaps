@@ -411,10 +411,17 @@ class VLMapBuilderROS(Node):
             camera_pose_grid_troch = torch.tensor(camera_pose_grid, device='cuda', dtype=torch.float32)
             voxels_to_clear = (raycast.traverse_pixels_torch(camera_pose_grid_troch, torch_grid)).to(torch.int)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
+            self.get_logger().info(f"Time for raycasting PC in map frame: {time.time() - start_raycast}")
             if len(voxels_to_clear) != 0:
                 pcd_clear = o3d.geometry.PointCloud()
                 pcd_clear.points = o3d.utility.Vector3dVector(voxels_to_clear)
-                o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear])
+                colors = np.array([[1, 0, 0] for _ in pcd_clear.points])  # RGB color for red
+                pcd_clear.colors = o3d.utility.Vector3dVector(colors)
+                pcd_cloud = o3d.geometry.PointCloud()
+                pcd_cloud.points = o3d.utility.Vector3dVector(torch_grid.cpu().numpy())
+                colors = np.array([[0, 1, 0] for _ in pcd_cloud.points])  # RGB color for green
+                pcd_cloud.colors = o3d.utility.Vector3dVector(colors)
+                o3d.visualization.draw_geometries_with_vertex_selection([pcd_clear + pcd_cloud])
             return                
             # Raycast and find the voxels to remove
             voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_grid, torch_grid, map_points)).to(torch.int)
