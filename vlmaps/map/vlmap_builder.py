@@ -19,17 +19,12 @@ from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
     load_3d_map,
     save_3d_map,
-    cvt_pose_vec2tf,
-    load_depth_npy,
-    depth2pc,
-    transform_pc,
     base_pos2grid_id_3d,
-    project_point,
-    get_sim_cam_mat,
     base_pos2grid_id_3d_torch
 )
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
 import vlmaps.utils.traverse_pixels as raycast
+from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_torch)
 
 #ROS2 stuff
 from tf2_ros.buffer import Buffer
@@ -38,7 +33,6 @@ from tf2_ros import TransformException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 import message_filters
-import rclpy
 import math
 import copy
 import torch
@@ -51,14 +45,7 @@ except ImportError:
     from open3d.cpu.pybind.geometry import PointCloud
     from open3d.cpu.pybind.utility import Vector3dVector
     from open3d.cpu.pybind.visualization import draw_geometries
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 
-
-def visualize_pc(pc: np.ndarray):
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pc)
-    o3d.visualization.draw_geometries([pcd])
 
 def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
     """Return homogeneous rotation matrix from quaternion.
@@ -84,25 +71,7 @@ def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry
         (                0.0,                 0.0,                 0.0, 1.0)
         ), dtype=np.float64)
 
-class FeturedPoint:
-    def __init__(self, point, embedding, rgb) -> None:
-        self.point_xyz = point
-        self.embedding = embedding
-        self.rgb = rgb
 
-class FeaturedPC:
-    def __init__(self, featured_points = []) -> None:
-        self.featured_points = featured_points
-        self.points_xyz = np.zeros([len(self.featured_points), 3])
-        self.embeddings = np.zeros([len(self.featured_points), 512])  # TODO parameterize embeddings size
-        self.rgb = np.zeros([len(self.featured_points), 3])
-        i = 0
-        if len(featured_points) > 0:
-            for featured_point in self.featured_points:
-                self.points_xyz[i] = featured_point.point_xyz
-                self.embeddings[i] = featured_point.embedding
-                self.rgb[i] = featured_point.rgb
-                i += 1
 
 #### ROS2 wrapper
 class VLMapBuilderROS(Node):
@@ -175,128 +144,7 @@ class VLMapBuilderROS(Node):
         # TODO: add to config file
         self.use_raycast = True
         self.raycasting_algorythm = "distance_based"       # voxel_traversal
-    
-    def project_pc(self, rgb, points, depth_factor=1.):
-        k = np.eye(3)
-        # Ergocub intrinsics: Realsense D455
-        intrinsics = {'fx': 612.7910766601562, 'fy': 611.8779296875, 'ppx': 321.7364196777344,
-                      'ppy': 245.0658416748047,
-                      'width': 640, 'height': 480}
-        width = intrinsics["width"]
-        height = intrinsics["height"]
 
-        #k[0, :] = np.array([intrinsics['fx'], 0, intrinsics['ppx']])
-        #k[1, 1:] = np.array([intrinsics['fy'], intrinsics['ppy']])
-        k = self.calib_mat
-
-        points = np.array(points) * depth_factor
-        uv = k @ points.T
-        uv = uv[0:2] / uv[2, :]
-
-        uv = np.round(uv, 0).astype(int)
-    
-        uv[0, :] = np.clip(uv[0, :], 0, height-1)
-        uv[1, :] = np.clip(uv[1, :], 0, width-1)
-
-        rgb[uv[1, :], uv[0, :], :] = ((points - points.min(axis=0)) / (points - points.min(axis=0)).max(axis=0) * 255).astype(int)
-
-        return rgb
-
-    def from_depth_to_pc(self, depth, depth_factor=1., downsample_factor=10):
-        #fx, fy, cx, cy = intrinsics
-        start = time.time()
-        fx = self.focal_lenght_x
-        fy = self.focal_lenght_y
-        cx = self.principal_point_x
-        cy = self.principal_point_y
-        
-        #points = []
-        
-        h, w = depth.shape
-        points = np.zeros([h*w , 3])
-        count = 0
-        for u in range(0, h):
-            for v in range(0, w):
-                z = depth[u, v]
-                if (z > 0.2 and z<6.0): # filter depth based on Z
-                    z = z / depth_factor
-                    x = ((v - cx) * z) / fx
-                    y = ((u - cy) * z) / fy
-                    #points.append([x, y, z])   #avoid memory allocation each loop iter
-                    points[count] = [x, y, z]
-                    count += 1
-        np.resize(points, count)
-        #points = np.array(points)
-        #Downsample
-        points=points[(np.random.randint(0, points.shape[0], np.round(count/downsample_factor, 0).astype(int)) )]
-        time_diff = time.time() - start
-        self.get_logger().info(f"Time for executing from_depth_to_pc: {time_diff}")
-        return points
-
-    def project_depth_features_pc(self, depth, features_per_pixels, color_img, depth_factor=1., downsample_factor=10):
-        fx = self.focal_lenght_x
-        fy = self.focal_lenght_y
-        cx = self.principal_point_x
-        cy = self.principal_point_y
-
-        # randomly sample pixels from depth (should be more memory efficient)
-        uu, vv = np.where(depth[:,:]>=0)
-        coords = np.column_stack((uu, vv))  # pixel pairs vector
-        np.random.shuffle(coords)   # I have all the pixels randomly shuffled
-        # Let's take only the number of pixels scaled by the downsample factor:
-        # Since we have shuffled the coordinates, we take the first N items
-        downsampled_coords = coords[:np.round(len(coords)/downsample_factor, 0).astype(int)]
-        feature_points_ls = np.empty([len(downsampled_coords), 3], dtype=object)
-        count = 0
-        for item in downsampled_coords:
-            # TODO optimize iteration formulation
-            u = item[0]
-            v = item[1]
-            z = depth[u, v]
-            if (z > 0.2 and z<6.0): # filter depth based on Z TODO parameterize these thresholds
-                z = z / depth_factor
-                x = ((v - cx) * z) / fx
-                y = ((u - cy) * z) / fy
-                feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :]) # avoid memory re-allocation each loop iter
-                count += 1
-        feature_points_ls.resize(count, refcheck=False)
-        return FeaturedPC(feature_points_ls)
-    
-    def project_depth_features_pc_torch(self, depth, features_per_pixels, color_img, depth_factor=1.0, downsampling_factor=10.0):
-        fx = self.focal_lenght_x
-        fy = self.focal_lenght_y
-        cx = self.principal_point_x
-        cy = self.principal_point_y
-        #intrisics = [[fx, 0.0, cx],
-        #             [0.0, fy, cy],
-        #             [0.0, 0.0, 1.0 / depth_factor]]
-        #intrisics = torch.tensor(list(intrisics), device='cuda').type(torch.float32)
-        depth = torch.tensor(list(depth), device='cuda').type(torch.float32)
-        # filter depth coords based on z distance
-        uu, vv = torch.where((depth > 0.2) & (depth< 6.0))
-
-        # Shuffle and downsample depth pixels
-        coords = torch.stack((uu, vv), dim=1)  # pixel pairs vector
-        coords = coords[torch.randperm(coords.size()[0])]
-        coords = coords[:int(coords.size(dim=0)/downsampling_factor)]
-        uu = coords[:, 0]
-        vv = coords[:, 1]
-        xx = (vv - cx) * depth[uu, vv] / fx
-        yy = (uu - cy) * depth[uu, vv] / fy
-        zz = depth[uu, vv] / depth_factor
-        # TODO combine features and colors in same var
-        uu, vv = uu.cpu().numpy(), vv.cpu().numpy()
-        features = copy.deepcopy(features_per_pixels[0, :, uu, vv])
-        color = color_img[uu, vv, :]
-        # TODO clean memory
-        pointcloud = torch.cat((xx.unsqueeze(1), yy.unsqueeze(1), zz.unsqueeze(1)), 1)
-        #xx, yy, zz = xx.cpu().numpy(), yy.cpu().numpy(), zz.cpu().numpy()
-        #coords = coords.cpu()
-        #pointcloud = np.concatenate((np.expand_dims(xx, 1), np.expand_dims(yy, 1), np.expand_dims(zz, 1)), axis=1)
-        #depth = depth.cpu().numpy()
-        pointcloud= pointcloud.cpu().numpy()
-
-        return pointcloud, features, color
 
     def sensors_callback(self, img_msg, depth_msg):
         """
@@ -348,33 +196,15 @@ class VLMapBuilderROS(Node):
         time_diff = time.time() - start
         self.get_logger().info(f"lseg features extracted in: {time_diff}")
 
-        #pc = self.from_depth_to_pc(depth, depth_factor=1.)
-        #self.get_logger().info('backprojected depth')
-        #### Convert normal pc to open3d format 
-        #pcd = o3d.geometry.PointCloud()
-        #pcd.points = o3d.utility.Vector3dVector(pc)
-        #o3d.visualization.draw_geometries_with_vertex_selection([pcd])
-        #### Convert back to numpy
-        #pc_global = np.asarray(pcd_global.points)
-
-        #### Debug
-        #tmp = self.project_pc(rgb, pc, depth_factor=1.)
-        #cv2.imshow("projected_pc2rgb", tmp)
-        #cv2.waitKey(0)
-
         #### Formatted PC with aligned features to pixel
         start = time.time()
         #featured_pc = self.project_depth_features_pc(depth, pix_feats, rgb, downsample_factor=20)
-        camera_pointcloud_xyz, features_per_point, color_per_point = self.project_depth_features_pc_torch(depth, pix_feats, rgb, downsampling_factor=20)
+        camera_pointcloud_xyz, features_per_point, color_per_point = project_depth_features_pc_torch(depth, pix_feats, rgb, self.calib_mat, downsampling_factor = 20)
         featured_pc = FeaturedPC()
         featured_pc.points_xyz = copy.deepcopy(camera_pointcloud_xyz)
         featured_pc.embeddings = copy.deepcopy(features_per_point)
         featured_pc.rgb = copy.deepcopy(color_per_point)
         self.get_logger().info(f"Time for executing project_depth_features_pc: {time.time() - start}")
-
-        #projection = self.project_pc(rgb, featured_pc.points_xyz, depth_factor=1.)
-        #cv2.imshow("projected_featuredPC", projection)
-        #cv2.waitKey(0)
 
         #### Transform PC into map frame
         start = time.time()
@@ -445,14 +275,16 @@ class VLMapBuilderROS(Node):
         self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
         time_save_diff = time.time() - time_save
         self.get_logger().info(f"Time for Saving Map: {time_save_diff}")
-        self.frame_i += 1   # increase counter for map saving purposes
         self.get_logger().info(f"iter {self.frame_i}")
+        self.frame_i += 1   # increase counter for map saving purposes
 
         return
 
-    # Let's do this in background on a separate thread, global_pc should not be already added
+    # TODO Let's do this in background on a separate thread, global_pc should not be already added
     def raycasting(self, camera_pose: np.ndarray, camera_cloud: np.ndarray):
         """
+        
+
         :param camera_pose: array of shape (1, 3) with the camera pose expressed in the map frame
         :param camera_cloud: array of shape (N, 3) with the points extracted from the camera depth, expressed in the map frame
         :return: List of lists of voxels to remove from the map
@@ -491,7 +323,7 @@ class VLMapBuilderROS(Node):
             map_points = map_points[map_mask]
             #self.get_logger().info(f"map points shape: {map_points.shape}")
 
-            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, cam_voxels_torch, map_points)).to(torch.int)
+            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, cam_voxels_torch, map_points, batch_size= 2**11)).to(torch.int)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
         else:   # distance based approach
             # Filter points on the map only in the bounding box of the camera pontcloud
@@ -616,23 +448,6 @@ class VLMapBuilderROS(Node):
         )
         self.clip_feat_dim = lseg_model.out_c
         return lseg_model, lseg_transform, crop_size, base_size, norm_mean, norm_std
-
-    def _backproject_depth(
-        self,
-        depth: np.ndarray,
-        calib_mat: np.ndarray,
-        depth_sample_rate: int,
-        min_depth: float = 0.1,
-        max_depth: float = 10,
-    ) -> np.ndarray:
-        pc, mask = depth2pc(depth, intr_mat=calib_mat, min_depth=min_depth, max_depth=max_depth)  # (3, N)
-        shuffle_mask = np.arange(pc.shape[1])
-        np.random.shuffle(shuffle_mask)
-        shuffle_mask = shuffle_mask[::depth_sample_rate]
-        mask = mask[shuffle_mask]
-        pc = pc[:, shuffle_mask]
-        pc = pc[:, mask]
-        return pc
 
     def _out_of_range(self, row: int, col: int, height: int, gs: int, vh: int) -> bool:
         return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0

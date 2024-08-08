@@ -1,9 +1,7 @@
-import time
 import numpy as np
 from typing import NamedTuple
 import matplotlib.pyplot as plt
 import torch
-
 
 
 class Point(NamedTuple):
@@ -65,6 +63,17 @@ def sampled_voxel_traversal(entry_pos, pc_grid, map):
     return crossed_voxels
 
 def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**13, distance_threshold = 0.9):
+    """
+    DEPRECATED
+    Check if the map voxels are nearby the ray cast from the entry position to the pointcloud.
+    
+    :param entry_pos: Tensor of shape (1, 3) with the entry position (camera pose) in the map frame
+    :param pc_grid: Tensor of shape (N, 3) is the voxelized pointcloud from the camera, in map frame
+    :param map: Tensor of shape (M, 3) is the voxelized map
+    :param batch_size: (int) the size of the batch used for GPU memory management
+    :param distance_threshold: (float) maximum distance allowed from a map voxel to a ray
+    :return: List of map voxels to be removed by the map
+    """
     entry_pos = torch.tensor(list(entry_pos), device='cuda')        # torch.Size([3])
     #map = torch.tensor(list(map), device='cuda')                    # torch.size([1000000, 3])
     #occupied_map = torch.tensor(list(occupied_map), device='cuda')  # torch.size([1000, 1000, 50])
@@ -124,6 +133,17 @@ def raycast_map_torch(entry_pos, pc_grid, map, batch_size = 2**13, distance_thre
     return points_to_remove_matrix
 
 def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, distance_threshold = 0.5, offset = 3.0):
+    """
+    Check if the map voxels are nearby the ray cast from the entry position to the pointcloud.
+    
+    :param entry_pos: Tensor of shape (1, 3) with the entry position (camera pose) in the map frame
+    :param pc_grid: Tensor of shape (N, 3) is the voxelized pointcloud from the camera, in map frame
+    :param map: Tensor of shape (M, 3) is the voxelized map
+    :param batch_size: (int) the size of the batch used for GPU memory management
+    :param distance_threshold: (float) maximum distance allowed from a map voxel to a ray
+    :param offset: (float) offset in voxels to stop raycasting before pc_grid is reached
+    :return: List of map voxels to be removed by the map
+    """
     #entry_pos = torch.tensor(entry_pos, device='cuda', dtype=torch.float32)
     directive_parameters = pc_grid - entry_pos
     directive_parameters = directive_parameters.to(torch.float32)
@@ -170,14 +190,6 @@ def raycast_map_torch_efficient(entry_pos, pc_grid, map, batch_size = 2**13, dis
 
     return points_to_remove_matrix
 
-#class Pixel:
-#    def __init__(self, x, y, z):
-#        self.x = x
-#        self.y = y
-#        self.z = z
-#
-#    def __repr__(self):
-#        return f"Pixel(x={self.x}, y={self.y}, z={self.z})"
 
 def traverse_pixels_torch(entry_pos, exit_pos):
     """
@@ -185,7 +197,7 @@ def traverse_pixels_torch(entry_pos, exit_pos):
     
     :param entry_pos: Tensor of shape (1, 3) with the entry position
     :param exit_pos: Tensor of shape (N, 3) with exit positions for N rays
-    :return: List of lists of Pixels for each ray
+    :return: List of Pixels traversed by the pointcloud
     """
     #assert entry_pos.shape == (1, 3)
     #assert exit_pos.shape[1] == 3
@@ -281,7 +293,7 @@ def traverse_pixels_torch(entry_pos, exit_pos):
     return pixel_traversal
 
 
-def traverse_pixels(entry_pos, exit_pos):
+def traverse_pixels_cpu(entry_pos, exit_pos):
     """
     Ray equation describes a point t along its trajectory:
     
@@ -443,7 +455,7 @@ if __name__ == '__main__':
     start = Point(np.random.uniform(-7,7), np.random.uniform(-7,7), np.random.uniform(-7,7))
     end = Point(np.random.uniform(-7,7), np.random.uniform(-7,7), np.random.uniform(-7,7))
     print(f"starting from X: {start[0]} Y: {start[1]} Z: {start[2]} TO end X: {end[0]} Y: {end[1]} Z: {end[2]}")
-    pixels = traverse_pixels(start, end)
+    pixels = traverse_pixels_cpu(start, end)
     
     # plot the results
     data = np.zeros((8,8,8))
