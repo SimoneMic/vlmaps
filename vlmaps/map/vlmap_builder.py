@@ -321,15 +321,21 @@ class VLMapBuilderROS(Node):
             map_points = torch.tensor(self.grid_pos, device='cuda', dtype=torch.float32)
             map_mask = torch.all((map_points >= min_bounds) & (map_points <= max_bounds), dim=1)
             map_points = map_points[map_mask]
-            #self.get_logger().info(f"map points shape: {map_points.shape}")
+            self.get_logger().info(f"map points shape: {map_points.shape}")
+            voxels_to_clear_list = []
+            #
+            camera_batch_sz = 2**10
+            for i in range(0, cam_voxels_torch.shape[0], camera_batch_sz):
+                pc_end = min(i + camera_batch_sz, cam_voxels_torch.shape[0])
+                voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, 
+                                                                       cam_voxels_torch[i:pc_end], 
+                                                                       map_points, 
+                                                                       batch_size= 2**11, 
+                                                                       distance_threshold=self.raycast_distance_threshold, 
+                                                                       offset=self.voxel_offset)).to(torch.int)
+                voxels_to_clear = voxels_to_clear.cpu().numpy()
+                voxels_to_clear_list.append(voxels_to_clear)
 
-            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, 
-                                                                   cam_voxels_torch, 
-                                                                   map_points, 
-                                                                   batch_size= 2**11, 
-                                                                   distance_threshold=self.raycast_distance_threshold, 
-                                                                   offset=self.voxel_offset)).to(torch.int)
-            voxels_to_clear = voxels_to_clear.cpu().numpy()
         else:   # distance based approach
             # Filter points on the map only in the bounding box of the camera pontcloud
             min_bounds = torch.min(cam_voxels_torch, dim=0)[0]  # Minimum x, y, z of the camera pointcloud
