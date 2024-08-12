@@ -77,7 +77,6 @@ def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry
 class VLMapBuilderROS(Node):
     def __init__(
         self,
-        #data_dir: Path,
         map_config: DictConfig
     ):
         super().__init__('VLMap_builder_node')
@@ -87,8 +86,8 @@ class VLMapBuilderROS(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         # subscribers init with callback
-        img_topic = "/cer/realsense_repeater/color_image"   # TODO initialize from config file
-        depth_topic = "/cer/realsense_repeater/depth_image"
+        img_topic = self.map_config.img_topic_name      #"/cer/realsense_repeater/color_image"
+        depth_topic = self.map_config.depth_topic_name         #"/cer/realsense_repeater/depth_image"
         self.img_sub = message_filters.Subscriber(self, Image, img_topic)
         self.depth_sub = message_filters.Subscriber(self, Image, depth_topic)
         self.tss = message_filters.ApproximateTimeSynchronizer([self.img_sub, self.depth_sub], 1, slop=0.3)        
@@ -101,14 +100,13 @@ class VLMapBuilderROS(Node):
         )
         ## First part of create_mobile_base_map for init stuff
         # access config info
-        camera_height = self.map_config.pose_info.camera_height
+        maximum_height = self.map_config.maximum_height
         self.cs = self.map_config.cell_size
         self.gs = self.map_config.grid_size
-        self.depth_sample_rate = self.map_config.depth_sample_rate
 
-        self.map_save_dir = "/home/ergocub"
+        self.map_save_dir = self.map_config.map_save_dir #"/home/ergocub"
         os.makedirs(self.map_save_dir, exist_ok=True)
-        self.map_save_path = self.map_save_dir + "/" + "vlmaps.h5df"
+        self.map_save_path = self.map_save_dir + "/" + self.map_config.map_name  #"vlmaps.h5df"
 
         # init lseg model
         self.lseg_model, self.lseg_transform, self.crop_size, self.base_size, self.norm_mean, self.norm_std = self._init_lseg()
@@ -124,7 +122,7 @@ class VLMapBuilderROS(Node):
             self.mapped_iter_set,
             self.max_id,
             self.loaded_map
-        ) = self._init_map(camera_height, self.cs, self.gs, self.map_save_path)
+        ) = self._init_map(maximum_height, self.cs, self.gs, self.map_save_path)
 
         self.cv_bridge = CvBridge()
 
@@ -132,8 +130,8 @@ class VLMapBuilderROS(Node):
         self.frame_i = 0
         # load camera calib matrix in config
         self.calib_mat = np.array(self.map_config.cam_calib_mat).reshape((3, 3))
-        self.cv_map = np.zeros((self.gs, self.gs, 3), dtype=np.uint8)
-        self.height_map = -100 * np.ones((self.gs, self.gs), dtype=np.float32)
+        #self.cv_map = np.zeros((self.gs, self.gs, 3), dtype=np.uint8)
+        #self.height_map = -100 * np.ones((self.gs, self.gs), dtype=np.float32)
 
         ### Make more explicit the calib intrinsics:
         self.focal_lenght_x = self.calib_mat[0,0]       #fx
@@ -141,34 +139,38 @@ class VLMapBuilderROS(Node):
         self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
         self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
-        # TODO: add to config file
-        self.use_raycast = True
-        self.raycasting_algorythm = "distance_based"       # voxel_traversal
+        self.target_frame = self.map_config.target_frame     #"map"
+        self.source_frame = self.map_config.source_frame     #"depth"
+        self.amcl_cov_threshold = self.map_config.amcl_cov_threshold
+        if self.amcl_cov_threshold < 0:
+            self.amcl_cov_threshold = 0.01
 
+        # TODO: add to config file
+        self.use_raycast = self.map_config.use_raycasting
+        self.raycasting_algorythm = self.map_config.raycasting_algorythm    #"distance_based"
+        self.voxel_offset = self.map_config.voxel_offset
+        self.raycast_distance_threshold = self.map_config.raycast_distance_threshold
 
     def sensors_callback(self, img_msg, depth_msg):
         """
         build the 3D map centering at the first base frame
         """
-        self.get_logger().info('sensors_callback')
+
         loop_timer = time.time()
         #### first do a TF check between the camera and map frame
-        target_frame="map"
-        source_frame="depth"
         try:
             transform = self.tf_buffer.lookup_transform(
-                    target_frame,
-                    source_frame,
+                    self.target_frame,
+                    self.source_frame,
                     depth_msg.header.stamp
                     )
         except TransformException as ex:
                 self.get_logger().info(
-                        f'Could not transform {source_frame} to {target_frame}: {ex}')
+                        f'Could not transform {self.source_frame} to {self.target_frame}: {ex}')
                 return
-        self.get_logger().info('Transform available')
         # Check covariance: TODO is it enough to check only two values?
-        if not (abs(self.amcl_cov.max()) < 0.01) and (abs(self.amcl_cov.min()) < 0.01):
-            self.get_logger().info(f'Covariance too big: skipping callback untill')
+        if not (abs(self.amcl_cov.max()) < self.amcl_cov_threshold) and (abs(self.amcl_cov.min()) < self.amcl_cov_threshold):
+            self.get_logger().info(f'Covariance too big: skipping callback untill amcl converges')
             return
 
         ## Convert tf2 transform to np array components
@@ -184,8 +186,6 @@ class VLMapBuilderROS(Node):
         ## Convert depth from ros2 to OpenCv
         depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, "passthrough")  # TODO check image color encoding
         depth = depth.astype(np.float16)
-        #depth_o3d = depth.astype(np.float32)
-        self.get_logger().info('Ros2 to CV2 conversion')
 
         #### Segment image and extract features
         # get pixel-aligned LSeg features
@@ -238,7 +238,7 @@ class VLMapBuilderROS(Node):
             # when the max_id exceeds the reserved size,
             # double the grid_feat, grid_pos, weight, grid_rgb lengths
             if self.max_id >= self.grid_feat.shape[0]:
-                self._reserve_map_space(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb)
+                self._reserve_map_space()
             
             # apply the distance weighting according to
             # ConceptFusion https://arxiv.org/pdf/2302.07241.pdf Sec. 4.1, Feature fusion
@@ -323,7 +323,12 @@ class VLMapBuilderROS(Node):
             map_points = map_points[map_mask]
             #self.get_logger().info(f"map points shape: {map_points.shape}")
 
-            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, cam_voxels_torch, map_points, batch_size= 2**11)).to(torch.int)
+            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, 
+                                                                   cam_voxels_torch, 
+                                                                   map_points, 
+                                                                   batch_size= 2**11, 
+                                                                   distance_threshold=self.raycast_distance_threshold, 
+                                                                   offset=self.voxel_offset)).to(torch.int)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
         else:   # distance based approach
             # Filter points on the map only in the bounding box of the camera pontcloud
@@ -334,7 +339,10 @@ class VLMapBuilderROS(Node):
             map_points = map_points[map_mask]
             #self.get_logger().info(f"map points shape: {map_points.shape}")
 
-            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, cam_voxels_torch, map_points)).to(torch.int)
+            voxels_to_clear = (raycast.raycast_map_torch_efficient(camera_pose_voxel_troch, 
+                                                                   cam_voxels_torch, 
+                                                                   map_points
+                                                                   )).to(torch.int)
             voxels_to_clear = voxels_to_clear.cpu().numpy()
         
         self.get_logger().info(f"Time for raycasting: {time.time() - start}")
@@ -374,13 +382,13 @@ class VLMapBuilderROS(Node):
     def amcl_callback(self, msg):
         self.amcl_cov = msg.pose.covariance
 
-    def _init_map(self, camera_height: float, cs: float, gs: int, map_path: Path) -> Tuple:
+    def _init_map(self, maximum_height: float, cs: float, gs: int, map_path: Path) -> Tuple:
         """
         initialize a voxel grid of size (gs, gs, vh), vh = camera_height / cs, each voxel is of
         size cs
         """
         # init the map related variables
-        vh = int(camera_height / cs)
+        vh = int(maximum_height / cs)
         grid_feat = np.zeros((gs * gs, self.clip_feat_dim), dtype=np.float32)
         grid_pos = np.zeros((gs * gs, 3), dtype=np.int32)
         occupied_ids = -1 * np.ones((gs, gs, vh), dtype=np.int32)
@@ -402,7 +410,7 @@ class VLMapBuilderROS(Node):
                 grid_rgb,
             ) = load_3d_map(self.map_save_path)
             mapped_iter_set = set(mapped_iter_list)
-            max_id = grid_feat.shape[0]
+            max_id = grid_feat.shape[0] - 1
             loaded_map = True
 
         return vh, grid_feat, grid_pos, weight, occupied_ids, grid_rgb, mapped_iter_set, max_id, loaded_map
@@ -452,32 +460,29 @@ class VLMapBuilderROS(Node):
     def _out_of_range(self, row: int, col: int, height: int, gs: int, vh: int) -> bool:
         return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0
 
-    def _reserve_map_space(
-        self, grid_feat: np.ndarray, grid_pos: np.ndarray, weight: np.ndarray, grid_rgb: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        grid_feat = np.concatenate(
+    def _reserve_map_space(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        self.grid_feat = np.concatenate(
             [
-                grid_feat,
-                np.zeros((grid_feat.shape[0], grid_feat.shape[1]), dtype=np.float32),
+                self.grid_feat,
+                np.zeros((self.grid_feat.shape[0], self.grid_feat.shape[1]), dtype=np.float32),
             ],
             axis=0,
         )
-        grid_pos = np.concatenate(
+        self.grid_pos = np.concatenate(
             [
-                grid_pos,
-                np.zeros((grid_pos.shape[0], grid_pos.shape[1]), dtype=np.int32),
+                self.grid_pos,
+                np.zeros((self.grid_pos.shape[0], self.grid_pos.shape[1]), dtype=np.int32),
             ],
             axis=0,
         )
-        weight = np.concatenate([weight, np.zeros((weight.shape[0]), dtype=np.int32)], axis=0)
-        grid_rgb = np.concatenate(
+        self.weight = np.concatenate([self.weight, np.zeros((self.weight.shape[0]), dtype=np.int32)], axis=0)
+        self.grid_rgb = np.concatenate(
             [
-                grid_rgb,
-                np.zeros((grid_rgb.shape[0], grid_rgb.shape[1]), dtype=np.float32),
+                self.grid_rgb,
+                np.zeros((self.grid_rgb.shape[0], self.grid_rgb.shape[1]), dtype=np.float32),
             ],
             axis=0,
         )
-        return grid_feat, grid_pos, weight, grid_rgb
 
     def _save_3d_map(
         self,

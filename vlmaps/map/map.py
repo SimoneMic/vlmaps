@@ -33,9 +33,9 @@ class Map:
         self.obstacles_map = None
         self.obstacles_cropped = None
 
-        self._setup_transforms()
-        if data_dir:
-            self._setup_paths(data_dir)
+        #self._setup_transforms()
+        #if data_dir:
+        #    self._setup_paths(data_dir)
         # self.obstacles_new_cropped = None
 
     def _setup_paths(self, data_dir: Union[Path, str]) -> None:

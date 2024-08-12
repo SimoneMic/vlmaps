@@ -43,12 +43,4 @@ sim_setting:
 #     - "stairs"
 #     - "other"
 #   categories: "mp3d" # "mp3d", "ai2thor"
-sound_map_config:
-  map_type: "wav2clip" # "clap" "audioclip" "wav2clip"
-  detect_mode: "retrieval" # "classification" "retrieval"
-controller_config:
-  gs: ${params.gs}
-  cs: ${params.cs}
-  forward_dist: ${params.forward_dist}
-  turn_angle: ${params.turn_angle}
-  goal_dist_thres: 0.1
+
