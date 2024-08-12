@@ -59,6 +59,12 @@ def project_depth_features_pc_torch(depth, features_per_pixels, color_img, calib
         coords = torch.stack((uu, vv), dim=1)  # pixel pairs vector
         coords = coords[torch.randperm(coords.size()[0])]
         coords = coords[:int(coords.size(dim=0)/downsampling_factor)]
+        # ordering back coords (useful for memory management in raytracing)
+        sorted_coords, indices = torch.sort(coords[:, 1], stable=True)
+        coords = coords[indices]
+        sorted_coords, indices = torch.sort(coords[:, 0], stable=True)
+        coords = coords[indices]
+        
         uu = coords[:, 0]
         vv = coords[:, 1]
         xx = (vv - cx) * depth[uu, vv] / fx
