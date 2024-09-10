@@ -25,6 +25,7 @@ from vlmaps.utils.mapping_utils import (
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
 import vlmaps.utils.traverse_pixels as raycast
 from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_torch)
+from vlmaps.utils.visualize_utils import visualize_rgb_map_3d
 
 #ROS2 stuff
 from tf2_ros.buffer import Buffer
@@ -45,6 +46,37 @@ except ImportError:
     from open3d.cpu.pybind.geometry import PointCloud
     from open3d.cpu.pybind.utility import Vector3dVector
     from open3d.cpu.pybind.visualization import draw_geometries
+
+from threading import Lock
+from multiprocessing import Process
+class NonBlockingVisualizer(Process):
+
+    def __init__(self, pcd: o3d.geometry.PointCloud):
+        super().__init__() 
+        self.background = [0, 0, 0]
+        self.vis = o3d.visualization.Visualizer()
+        self.vis.create_window()
+        self.opt = self.vis.get_render_option()
+        self.opt.background_color = np.asarray(self.background)
+        self.pcd = pcd
+        self.vis.add_geometry(self.pcd)
+        self.mutex_lock = Lock()
+    
+    def run(self):
+        while True:
+            self.mutex_lock.acquire()
+            self.vis.update_geometry(self.pcd)
+            self.mutex_lock.release()
+            self.vis.poll_events()
+            self.vis.update_renderer()
+    
+    def update_pc(self, new_pcd):
+        self.mutex_lock.acquire()
+        self.vis.remove_geometry(self.pcd)
+        self.pcd = new_pcd
+        self.vis.add_geometry(self.pcd)
+        self.vis.update_geometry(self.pcd)
+        self.mutex_lock.release()
 
 
 def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
@@ -150,6 +182,20 @@ class VLMapBuilderROS(Node):
         self.raycasting_algorythm = self.map_config.raycasting_algorythm    #"distance_based"
         self.voxel_offset = self.map_config.voxel_offset
         self.raycast_distance_threshold = self.map_config.raycast_distance_threshold
+        self.vis_initialized = False
+
+    def non_blocking_visualize_rgb_map_3d(self, pc: np.ndarray, rgb: np.ndarray, voxel_size=1.0):
+        grid_rgb = rgb / 255.0
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pc)
+        pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
+        # visualize the point cloud
+        if not self.vis_initialized:
+            self.visualizer = NonBlockingVisualizer(pcd)
+            self.vis_initialized = True
+            self.visualizer.start()
+        else:
+            self.visualizer.update_pc(pcd)
 
     def sensors_callback(self, img_msg, depth_msg):
         """
@@ -161,12 +207,12 @@ class VLMapBuilderROS(Node):
         try:
             transform = self.tf_buffer.lookup_transform(
                     self.target_frame,
-                    self.source_frame,
+                    depth_msg.header.frame_id,
                     depth_msg.header.stamp
                     )
         except TransformException as ex:
                 self.get_logger().info(
-                        f'Could not transform {self.source_frame} to {self.target_frame}: {ex}')
+                        f'Could not transform {depth_msg.header.frame_id} to {self.target_frame}: {ex}')
                 return
         # Check covariance: TODO is it enough to check only two values?
         if not (abs(self.amcl_cov.max()) < self.amcl_cov_threshold) and (abs(self.amcl_cov.min()) < self.amcl_cov_threshold):
@@ -199,7 +245,7 @@ class VLMapBuilderROS(Node):
         #### Formatted PC with aligned features to pixel
         start = time.time()
         #featured_pc = self.project_depth_features_pc(depth, pix_feats, rgb, downsample_factor=20)
-        camera_pointcloud_xyz, features_per_point, color_per_point = project_depth_features_pc_torch(depth, pix_feats, rgb, self.calib_mat, downsampling_factor = 20)
+        camera_pointcloud_xyz, features_per_point, color_per_point = project_depth_features_pc_torch(depth, pix_feats, rgb, self.calib_mat, max_depth=8.0, downsampling_factor = 20)
         featured_pc = FeaturedPC()
         featured_pc.points_xyz = copy.deepcopy(camera_pointcloud_xyz)
         featured_pc.embeddings = copy.deepcopy(features_per_point)
@@ -220,8 +266,9 @@ class VLMapBuilderROS(Node):
         #### Raycast TODO: move it in a separate thread
         if ((self.frame_i != 0) or (self.loaded_map == True)) and self.use_raycast:
 
-            map_to_cam_tf = np.linalg.inv(transform_np)
-            cam_pose = map_to_cam_tf[0:3,-1]
+            #map_to_cam_tf = np.linalg.inv(transform_np)
+            #cam_pose = map_to_cam_tf[0:3,-1]
+            cam_pose = [transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z]
             voxels_to_clear = self.raycasting(cam_pose, featured_pc.points_xyz)
             self.remove_map_voxels(voxels_to_clear)
 
@@ -277,6 +324,7 @@ class VLMapBuilderROS(Node):
         self.get_logger().info(f"Time for Saving Map: {time_save_diff}")
         self.get_logger().info(f"iter {self.frame_i}")
         self.frame_i += 1   # increase counter for map saving purposes
+        self.non_blocking_visualize_rgb_map_3d(self.grid_pos, self.grid_rgb)
 
         return
 
@@ -334,7 +382,9 @@ class VLMapBuilderROS(Node):
                                                                        distance_threshold=self.raycast_distance_threshold, 
                                                                        offset=self.voxel_offset)).to(torch.int)
                 voxels_to_clear = voxels_to_clear.cpu().numpy()
-                voxels_to_clear_list.append(voxels_to_clear)
+                voxels_to_clear_list.extend(voxels_to_clear)
+            self.get_logger().info(f"Time for raycasting: {time.time() - start}")
+            return np.array(voxels_to_clear_list)
 
         else:   # distance based approach
             # Filter points on the map only in the bounding box of the camera pontcloud
@@ -505,3 +555,4 @@ class VLMapBuilderROS(Node):
         weight = weight[:max_id]
         grid_rgb = grid_rgb[:max_id]
         save_3d_map(self.map_save_path, grid_feat, grid_pos, weight, occupied_ids, list(mapped_iter_set), grid_rgb)
+
