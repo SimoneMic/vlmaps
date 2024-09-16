@@ -54,8 +54,6 @@ except ImportError:
 
 from threading import Lock
 from multiprocessing import Process, Queue
-from vispy import app, scene
-from vispy.scene.visuals import Markers
 
 _DATATYPES = {}
 _DATATYPES[PointField.INT8]    = ('b', 1)
@@ -67,32 +65,32 @@ _DATATYPES[PointField.UINT32]  = ('I', 4)
 _DATATYPES[PointField.FLOAT32] = ('f', 4)
 _DATATYPES[PointField.FLOAT64] = ('d', 8)
 
-class VispyVisualizer(Process):
-    def __init__(self, queue):
-        super().__init__()
-        self.queue = queue
-        self.run_flag = True
-    
-    def run(self):
-        canvas = scene.SceneCanvas(keys="interactive", show=True)
-        view = canvas.central_widget.add_view()
-        scatterplot = Markers()
-        view.add(scatterplot)
-        view.camera = 'turntable'
-        #view.camera = scene.cameras.PanZoomCamera()
-
-        while self.run_flag:
-            if not self.queue.empty():
-                points, colors = self.queue.get()
-                scatterplot.set_data(points, edge_color=None, face_color=colors, size=0.05)
-            app.process_events()
-            canvas.update()
-            canvas.draw()
-        
-        canvas.close()
-    
-    def close(self) -> None:
-        self.run_flag = False
+#class VispyVisualizer(Process):
+#    def __init__(self, queue):
+#        super().__init__()
+#        self.queue = queue
+#        self.run_flag = True
+#    
+#    def run(self):
+#        canvas = scene.SceneCanvas(keys="interactive", show=True)
+#        view = canvas.central_widget.add_view()
+#        scatterplot = Markers()
+#        view.add(scatterplot)
+#        view.camera = 'turntable'
+#        #view.camera = scene.cameras.PanZoomCamera()
+#
+#        while self.run_flag:
+#            if not self.queue.empty():
+#                points, colors = self.queue.get()
+#                scatterplot.set_data(points, edge_color=None, face_color=colors, size=0.05)
+#            app.process_events()
+#            canvas.update()
+#            canvas.draw()
+#        
+#        canvas.close()
+#    
+#    def close(self) -> None:
+#        self.run_flag = False
 
 class NonBlockingVisualizer(Process):
 
@@ -231,7 +229,7 @@ class VLMapBuilderROS(Node):
         self.voxel_offset = self.map_config.voxel_offset
         self.raycast_distance_threshold = self.map_config.raycast_distance_threshold
         # Visualization
-        self.pointcloud_pub = self.create_publisher(PointCloud2, "/vlmap",10)
+        self.pointcloud_pub = self.create_publisher(PointCloud2, "vlmap",10)
 
         #self.vis_initialized = False
         #self.queue = Queue()
@@ -310,61 +308,69 @@ class VLMapBuilderROS(Node):
         of points.
         '''
 
-        points_ren = []
-        lim = points.shape[0]
-        #print(points.shape)
-        for k in range(lim):
-            x = points[k,0]
-            y = points[k,1]
-            z = points[k,2]
-            r = int(colors[k,0])
-            g = int(colors[k,1])
-            b = int(colors[k,2])
-            a = int(255)
+        #points_ren = []
+        #lim = points.shape[0]
+        #for k in range(lim):
+        #    x = points[k,0]
+        #    y = points[k,1]
+        #    z = points[k,2]
+        #    r = int(colors[k,0]/255)
+        #    g = int(colors[k,1]/255)
+        #    b = int(colors[k,2]/255)
+        #    a = int(255)
+        #    rgb = struct.unpack('I', struct.pack('BBBB', b, g, r, a))[0]
+        #    pt = [x, y, z, rgb]
+        #    points_ren.append(pt)
 
-            rgb = struct.unpack('I', struct.pack('BBBB', b, g, r, a))[0]
-            pt = [x, y, z, rgb]
-            points_ren.append(pt)
-
-        #fields = [PointField('x', 0, PointField.FLOAT32, 1),
-        #        PointField('y', 4, PointField.FLOAT32, 1),
-        #        PointField('z', 8, PointField.FLOAT32, 1),
-        #        PointField('rgba', 12, PointField.UINT32, 1),
-        #        ]
-        fields = [PointField(), PointField(), PointField(), PointField()]
-
-        fields[0].name = "x"
-        fields[0].offset = 0
-        fields[0].datatype = 7
-        fields[0].count = 1
-        fields[0].name = "y"
-        fields[0].offset = 4
-        fields[0].datatype = 7
-        fields[0].count = 1
-        fields[0].name = "z"
-        fields[0].offset = 8
-        fields[0].datatype = 7
-        fields[0].count = 1
-        fields[0].name = "rgb"
-        fields[0].offset = 16
-        fields[0].datatype = 7
-        fields[0].count = 1
+        #fields = [PointField(), PointField(), PointField(), PointField()]
+        #fields[0].name = "x"
+        #fields[0].offset = 0
+        #fields[0].datatype = 7
+        #fields[0].count = 1
+        #fields[1].name = "y"
+        #fields[1].offset = 4
+        #fields[1].datatype = 7
+        #fields[1].count = 1
+        #fields[2].name = "z"
+        #fields[2].offset = 8
+        #fields[2].datatype = 7
+        #fields[2].count = 1
+        #fields[3].name = "rgb"
+        #fields[3].offset = 16
+        #fields[3].datatype = 7
+        #fields[3].count = 1
 
         header = Header()
         header.frame_id = "map"
-        header.stamp = self.get_clock().now()
-        
-        msg = PointCloud2
-        msg.header = header
-        msg.fields = fields
-        msg.height = 1
-        msg.width = len(points) #480*640
-        msg.is_dense = False
-        msg.is_bigendian = False
-        xyzrgb = np.array(np.hstack([points, colors]), dtype=np.float32)
-        msg.point_step = 24
-        msg.row_step = msg.point_step * len(points)
-        msg.data = xyzrgb.tostring()
+        header.stamp = self.get_clock().now().to_msg()
+
+        ros_dtype = PointField.FLOAT32
+        dtype = np.float32
+        itemsize = np.dtype(dtype).itemsize
+        fields = [PointField(name=n, offset=i*itemsize, datatype=ros_dtype, count=1) for i, n in enumerate('xyzrgb')]
+        nbytes = 6
+        xyzrgb = np.array(np.hstack([points, colors/255]), dtype=np.float32)
+        #xyzrgb = np.array(points_ren, dtype=np.float32)
+        msg = PointCloud2(header=header, 
+                          height = 1, 
+                          width= points.shape[0], 
+                          fields=fields, 
+                          is_dense= False, 
+                          is_bigedian=False, 
+                          point_step=(itemsize * nbytes), 
+                          row_step = (itemsize * nbytes * points.shape[0]), 
+                          data=xyzrgb.tobytes())
+    
+        #msg.header = header
+        #msg.fields = fields
+        #msg.height = 1
+        #msg.width = len(points) #480*640
+        #msg.is_dense = False
+        #msg.is_bigendian = False
+        #
+        #msg.point_step = 24
+        #msg.row_step = msg.point_step * len(points)
+        #msg.data = xyzrgb.tostring()
 
         #msg = self.create_cloud(header, fields, points_ren)
         return msg
@@ -481,9 +487,11 @@ class VLMapBuilderROS(Node):
                     self.grid_feat[occupied_id] * self.weight[occupied_id] + feat.flatten() * alpha
                 ) / (self.weight[occupied_id] + alpha)
                 self.grid_rgb[occupied_id] = (self.grid_rgb[occupied_id] * self.weight[occupied_id] + rgb * alpha) / (
-                    self.weight[occupied_id] + alpha
+                    self.weight[occupied_id] + alpha    #TODO: check why this can give a value > 255 (BUG)
                 )
                 self.weight[occupied_id] += alpha
+        # Set points with color > 255 to 255, as a sort of saturation (feature fusion bug)
+        self.grid_rgb[self.grid_rgb > 255] = 255
         
         self.get_logger().info(f"Time for updating Map: {time.time() - start}")
         self.get_logger().info(f"CALLBACK TIME: {time.time() - loop_timer}")
