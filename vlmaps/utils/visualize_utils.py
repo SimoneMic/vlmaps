@@ -11,7 +11,9 @@ def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray):
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pc)
     pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
-    o3d.visualization.draw_geometries([pcd])
+    voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd,
+                                                            voxel_size=0.5)
+    o3d.visualization.draw_geometries([voxel_grid])
     #vis = o3d.visualization.Visualizer()
     #vis.create_window()
     #vis.add_geometry(pcd)
