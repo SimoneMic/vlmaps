@@ -13,7 +13,6 @@ import open3d as o3d
 from cv_bridge import CvBridge
 import time
 from geometry_msgs.msg import PoseWithCovarianceStamped
-import gc
 
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
@@ -36,93 +35,11 @@ from sensor_msgs.msg import Image
 import message_filters
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
-import struct
-import ctypes
 
 import math
 import copy
 import torch
 
-try:
-    from open3d.cuda.pybind.geometry import PointCloud
-    from open3d.cuda.pybind.utility import Vector3dVector
-    from open3d.cuda.pybind.visualization import draw_geometries
-except ImportError:
-    from open3d.cpu.pybind.geometry import PointCloud
-    from open3d.cpu.pybind.utility import Vector3dVector
-    from open3d.cpu.pybind.visualization import draw_geometries
-
-from threading import Lock
-from multiprocessing import Process, Queue
-
-_DATATYPES = {}
-_DATATYPES[PointField.INT8]    = ('b', 1)
-_DATATYPES[PointField.UINT8]   = ('B', 1)
-_DATATYPES[PointField.INT16]   = ('h', 2)
-_DATATYPES[PointField.UINT16]  = ('H', 2)
-_DATATYPES[PointField.INT32]   = ('i', 4)
-_DATATYPES[PointField.UINT32]  = ('I', 4)
-_DATATYPES[PointField.FLOAT32] = ('f', 4)
-_DATATYPES[PointField.FLOAT64] = ('d', 8)
-
-#class VispyVisualizer(Process):
-#    def __init__(self, queue):
-#        super().__init__()
-#        self.queue = queue
-#        self.run_flag = True
-#    
-#    def run(self):
-#        canvas = scene.SceneCanvas(keys="interactive", show=True)
-#        view = canvas.central_widget.add_view()
-#        scatterplot = Markers()
-#        view.add(scatterplot)
-#        view.camera = 'turntable'
-#        #view.camera = scene.cameras.PanZoomCamera()
-#
-#        while self.run_flag:
-#            if not self.queue.empty():
-#                points, colors = self.queue.get()
-#                scatterplot.set_data(points, edge_color=None, face_color=colors, size=0.05)
-#            app.process_events()
-#            canvas.update()
-#            canvas.draw()
-#        
-#        canvas.close()
-#    
-#    def close(self) -> None:
-#        self.run_flag = False
-
-class NonBlockingVisualizer(Process):
-
-    def __init__(self, pcd: o3d.geometry.PointCloud):
-        super().__init__() 
-        self.background = [0, 0, 0]
-        self.vis = o3d.visualization.Visualizer()
-        self.vis.create_window()
-        self.opt = self.vis.get_render_option()
-        self.opt.background_color = np.asarray(self.background)
-        self.pcd = pcd
-        self.vis.add_geometry(self.pcd)
-        self.mutex_lock = Lock()
-    
-    def run(self):
-        while True:
-            self.mutex_lock.acquire()
-            #print("[run] updating geometry")
-            self.vis.update_geometry(self.pcd)
-            self.mutex_lock.release()
-            self.vis.poll_events()
-            self.vis.update_renderer()
-            
-    
-    def update_pc(self, new_pcd):
-        self.mutex_lock.acquire()
-        print("[update_pc] updating passing new pcd")
-        self.vis.remove_geometry(self.pcd)
-        self.pcd = new_pcd
-        self.vis.add_geometry(self.pcd)
-        self.vis.update_geometry(self.pcd)
-        self.mutex_lock.release()
 
 
 def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
@@ -231,114 +148,12 @@ class VLMapBuilderROS(Node):
         # Visualization
         self.pointcloud_pub = self.create_publisher(PointCloud2, "vlmap",10)
 
-        #self.vis_initialized = False
-        #self.queue = Queue()
-
-
-    #def non_blocking_visualize_rgb_map_3d(self, pc: np.ndarray, rgb: np.ndarray, voxel_size=1.0):
-    #    grid_rgb = rgb / 255.0
-    #    pcd = o3d.geometry.PointCloud()
-    #    pcd.points = o3d.utility.Vector3dVector(pc)
-    #    pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
-    #    # visualize the point cloud
-    #    if not self.vis_initialized:
-    #        self.visualizer = NonBlockingVisualizer(pcd)
-    #        self.vis_initialized = True
-    #        self.visualizer.start()
-    #    else:
-    #        self.visualizer.update_pc(pcd)
-
-    def _get_struct_fmt(is_bigendian, fields, field_names=None):
-        fmt = '>' if is_bigendian else '<'
-
-        offset = 0
-        for field in (f for f in sorted(fields, key=lambda f: f.offset) if field_names is None or f.name in field_names):
-            if offset < field.offset:
-                fmt += 'x' * (field.offset - offset)
-                offset = field.offset
-            if field.datatype not in _DATATYPES:
-                print('Skipping unknown PointField datatype [%d]' % field.datatype)
-            else:
-                datatype_fmt, datatype_length = _DATATYPES[field.datatype]
-                fmt    += field.count * datatype_fmt
-                offset += field.count * datatype_length
-
-        return fmt
-
-    #
-    def create_cloud(self, header, fields, points):
-        """
-        Create a L{sensor_msgs.msg.PointCloud2} message.
-
-        @param header: The point cloud header.
-        @type  header: L{std_msgs.msg.Header}
-        @param fields: The point cloud fields.
-        @type  fields: iterable of L{sensor_msgs.msg.PointField}
-        @param points: The point cloud points.
-        @type  points: list of iterables, i.e. one iterable for each point, with the
-                       elements of each iterable being the values of the fields for 
-                       that point (in the same order as the fields parameter)
-        @return: The point cloud.
-        @rtype:  L{sensor_msgs.msg.PointCloud2}
-        """
-
-        cloud_struct = struct.Struct(self._get_struct_fmt(False, fields))
-
-        buff = ctypes.create_string_buffer(cloud_struct.size * len(points))
-
-        point_step, pack_into = cloud_struct.size, cloud_struct.pack_into
-        offset = 0
-        for p in points:
-            pack_into(buff, offset, *p)
-            offset += point_step
-
-        return PointCloud2(header=header,
-                           height=1,
-                           width=len(points),
-                           is_dense=False,
-                           is_bigendian=False,
-                           fields=fields,
-                           point_step=cloud_struct.size,
-                           row_step=cloud_struct.size * len(points),
-                           data=buff.raw)
 
     def xyzrgb_array_to_pointcloud2(self, points, colors, stamp=None, frame_id=None, seq=None):
         '''
         Create a sensor_msgs.PointCloud2 from an array
         of points.
         '''
-
-        #points_ren = []
-        #lim = points.shape[0]
-        #for k in range(lim):
-        #    x = points[k,0]
-        #    y = points[k,1]
-        #    z = points[k,2]
-        #    r = int(colors[k,0]/255)
-        #    g = int(colors[k,1]/255)
-        #    b = int(colors[k,2]/255)
-        #    a = int(255)
-        #    rgb = struct.unpack('I', struct.pack('BBBB', b, g, r, a))[0]
-        #    pt = [x, y, z, rgb]
-        #    points_ren.append(pt)
-
-        #fields = [PointField(), PointField(), PointField(), PointField()]
-        #fields[0].name = "x"
-        #fields[0].offset = 0
-        #fields[0].datatype = 7
-        #fields[0].count = 1
-        #fields[1].name = "y"
-        #fields[1].offset = 4
-        #fields[1].datatype = 7
-        #fields[1].count = 1
-        #fields[2].name = "z"
-        #fields[2].offset = 8
-        #fields[2].datatype = 7
-        #fields[2].count = 1
-        #fields[3].name = "rgb"
-        #fields[3].offset = 16
-        #fields[3].datatype = 7
-        #fields[3].count = 1
 
         header = Header()
         header.frame_id = "map"
@@ -360,19 +175,7 @@ class VLMapBuilderROS(Node):
                           point_step=(itemsize * nbytes), 
                           row_step = (itemsize * nbytes * points.shape[0]), 
                           data=xyzrgb.tobytes())
-    
-        #msg.header = header
-        #msg.fields = fields
-        #msg.height = 1
-        #msg.width = len(points) #480*640
-        #msg.is_dense = False
-        #msg.is_bigendian = False
-        #
-        #msg.point_step = 24
-        #msg.row_step = msg.point_step * len(points)
-        #msg.data = xyzrgb.tostring()
 
-        #msg = self.create_cloud(header, fields, points_ren)
         return msg
 
     def sensors_callback(self, img_msg, depth_msg):
