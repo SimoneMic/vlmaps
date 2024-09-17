@@ -61,7 +61,7 @@ def project_depth_features_pc_torch(depth, features_per_pixels, color_img, calib
         # Inflate human segmentation mask
         binary_mask = np.full_like(category_preds, False)
         infalted_category_preds = category_preds
-        if inds_to_remove is not None:
+        if (inds_to_remove is not None) and inds_to_remove!=[]:
             for item in inds_to_remove:
                 binary_mask = binary_mask | (category_preds==item)
             kernel = np.ones((20,20),np.uint8)
@@ -92,8 +92,10 @@ def project_depth_features_pc_torch(depth, features_per_pixels, color_img, calib
 
         pointcloud = torch.cat((xx.unsqueeze(1), yy.unsqueeze(1), zz.unsqueeze(1)), 1)
         pointcloud= pointcloud.cpu().numpy()
-
-        return pointcloud, features, color, infalted_category_preds[uu, vv]
+        if (inds_to_remove is not None) and inds_to_remove!=[]:
+            return pointcloud, features, color, infalted_category_preds[uu, vv]
+        else:
+             return pointcloud, features, color, category_preds
 
 def project_depth_features_pc(depth, features_per_pixels, color_img, calib_matrix, inds_to_remove = None, category_preds = None, min_depth = 0.2, max_depth = 6.0, depth_factor=1., downsample_factor=10):
         """

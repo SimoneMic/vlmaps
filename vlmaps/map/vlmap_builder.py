@@ -239,7 +239,10 @@ class VLMapBuilderROS(Node):
         featured_pc.points_xyz = copy.deepcopy(camera_pointcloud_xyz)
         featured_pc.embeddings = copy.deepcopy(features_per_point)
         featured_pc.rgb = copy.deepcopy(color_per_point)
-        featured_pc.category_preds = copy.deepcopy(category_preds)  #TODO check if necessary
+        if category_preds is not None:
+            featured_pc.category_preds = copy.deepcopy(category_preds)  #TODO check if necessary
+        else:
+            featured_pc.category_preds = np.full_like(featured_pc.rgb, -1)
         self.get_logger().info(f"Time for executing project_depth_features_pc: {time.time() - start}")
 
         #### Transform PC into map frame
@@ -308,12 +311,12 @@ class VLMapBuilderROS(Node):
         self.get_logger().info(f"Time for updating Map: {time.time() - start}")
         self.get_logger().info(f"CALLBACK TIME: {time.time() - loop_timer}")
         # Save map each X callbacks TODO prameterize and do it in a separate thread
-        #if self.frame_i % 10 == 0:
-        self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
-        time_save = time.time()
-        self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
-        time_save_diff = time.time() - time_save
-        self.get_logger().info(f"Time for Saving Map: {time_save_diff}")
+        if self.frame_i % 10 == 0:
+            self.get_logger().info(f"Temporarily saving {self.max_id} features at iter {self.frame_i}...")
+            time_save = time.time()
+            self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
+            time_save_diff = time.time() - time_save
+            self.get_logger().info(f"Time for Saving Map: {time_save_diff}")
         self.get_logger().info(f"iter {self.frame_i}")
         self.frame_i += 1   # increase counter for map saving purposes
 
