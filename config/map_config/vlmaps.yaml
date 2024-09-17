@@ -7,7 +7,7 @@ map_save_dir: "/home/ergocub"
 map_name: "vlmaps.h5df"
 img_topic_name: "/camera/rgbd/img"
 depth_topic_name: "/camera/rgbd/depth"
-amcl_cov_threshold: 0.01
+amcl_cov_threshold: 1.01
 target_frame: "map"
 source_frame: "realsense" #deprecated
 use_raycasting: True
@@ -15,6 +15,37 @@ raycasting_algorythm: "distance_based"
 voxel_offset: 1
 raycast_distance_threshold: 0.9
 
+potential_obstacle_names:
+  - "chair"
+  - "wall"
+  - "wall above the door"
+  - "table"
+  - "window"
+  - "floor"
+  - "stairs"
+  - "other"
+obstacle_names:
+  - "wall"
+  - "chair"
+  - "table"
+  - "window"
+  - "stairs"
+  - "other"
+labels:
+  - "other"
+  - "screen"
+  - "table"
+  - "closet"
+  - "chair"
+  - "shelf"
+  - "door"
+  - "wall"
+  - "ceiling"
+  - "floor"
+  - "human"
+classes_to_skip:
+  - "human"
+categories: "mp3d"
 
 #depth_sample_rate: 30   #100
 #dilate_iter: 3

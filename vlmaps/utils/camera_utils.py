@@ -1,12 +1,14 @@
 import numpy as np
 import copy
 import torch
+import cv2
 
 class FeturedPoint:
-    def __init__(self, point, embedding, rgb) -> None:
+    def __init__(self, point, embedding, rgb, category_pred=-1) -> None:
         self.point_xyz = point
         self.embedding = embedding
         self.rgb = rgb
+        self.categoy_pred = category_pred
 
 class FeaturedPC:
     def __init__(self, featured_points = []) -> None:
@@ -14,15 +16,17 @@ class FeaturedPC:
         self.points_xyz = np.zeros([len(self.featured_points), 3])
         self.embeddings = np.zeros([len(self.featured_points), 512])  # TODO parameterize embeddings size
         self.rgb = np.zeros([len(self.featured_points), 3])
+        self.category_preds = np.zeros([len(self.featured_points), 1])
         i = 0
         if len(featured_points) > 0:
             for featured_point in self.featured_points:
                 self.points_xyz[i] = featured_point.point_xyz
                 self.embeddings[i] = featured_point.embedding
                 self.rgb[i] = featured_point.rgb
+                self.category_preds[i] = featured_point.categoy_pred
                 i += 1
 
-def project_depth_features_pc_torch(depth, features_per_pixels, color_img, calib_matrix, min_depth = 0.2, max_depth = 6.0, depth_factor=1.0, downsampling_factor=10.0):
+def project_depth_features_pc_torch(depth, features_per_pixels, color_img, calib_matrix, inds_to_remove = None, category_preds = None, min_depth = 0.2, max_depth = 6.0, depth_factor=1.0, downsampling_factor=10.0):
         """
         Creates the 3D pointcloud, in camera frame, from the depth and alignes the clip features and RGB color for each 3D point.
         Uses tensors to speed up the process. Uses GPU
@@ -54,6 +58,17 @@ def project_depth_features_pc_torch(depth, features_per_pixels, color_img, calib
         depth = torch.tensor(list(depth), device='cuda').type(torch.float32)
         # filter depth coords based on z distance
         uu, vv = torch.where((depth > min_depth) & (depth < max_depth))
+        # Inflate human segmentation mask
+        binary_mask = np.full_like(category_preds, False)
+        infalted_category_preds = category_preds
+        if inds_to_remove is not None:
+            for item in inds_to_remove:
+                binary_mask = binary_mask | (category_preds==item)
+            kernel = np.ones((20,20),np.uint8)
+            cv_img = binary_mask.astype(np.uint8)
+            infalted_mask = np.array(cv2.dilate(cv_img,kernel,iterations = 1), dtype=bool)
+            if not infalted_category_preds[infalted_mask]==[]:
+                infalted_category_preds[infalted_mask] = inds_to_remove[0]
 
         # Shuffle and downsample depth pixels
         coords = torch.stack((uu, vv), dim=1)  # pixel pairs vector
@@ -78,9 +93,9 @@ def project_depth_features_pc_torch(depth, features_per_pixels, color_img, calib
         pointcloud = torch.cat((xx.unsqueeze(1), yy.unsqueeze(1), zz.unsqueeze(1)), 1)
         pointcloud= pointcloud.cpu().numpy()
 
-        return pointcloud, features, color
+        return pointcloud, features, color, infalted_category_preds[uu, vv]
 
-def project_depth_features_pc(depth, features_per_pixels, color_img, calib_matrix, min_depth = 0.2, max_depth = 6.0, depth_factor=1., downsample_factor=10):
+def project_depth_features_pc(depth, features_per_pixels, color_img, calib_matrix, inds_to_remove = None, category_preds = None, min_depth = 0.2, max_depth = 6.0, depth_factor=1., downsample_factor=10):
         """
         Creates the 3D pointcloud, in camera frame, from the depth and alignes the clip features and RGB color for each 3D point.
         Uses CPU
@@ -114,6 +129,18 @@ def project_depth_features_pc(depth, features_per_pixels, color_img, calib_matri
         downsampled_coords = coords[:np.round(len(coords)/downsample_factor, 0).astype(int)]
         feature_points_ls = np.empty([len(downsampled_coords), 3], dtype=object)
         count = 0
+        # Inflate human segmentation mask
+        binary_mask = np.full_like(category_preds, False)
+        infalted_category_preds = category_preds
+        if inds_to_remove is not None:
+            for item in inds_to_remove:
+                binary_mask = binary_mask | (category_preds==item)
+            kernel = np.ones((20,20),np.uint8)
+            cv_img = binary_mask.astype(np.uint8)
+            infalted_mask = np.array(cv2.dilate(cv_img,kernel,iterations = 1), dtype=bool)
+            if not infalted_category_preds[infalted_mask]==[]:
+                infalted_category_preds[infalted_mask] = inds_to_remove[0]
+
         for item in downsampled_coords:
             # TODO optimize iteration formulation
             u = item[0]
@@ -123,7 +150,11 @@ def project_depth_features_pc(depth, features_per_pixels, color_img, calib_matri
                 z = z / depth_factor
                 x = ((v - cx) * z) / fx
                 y = ((u - cy) * z) / fy
-                feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :]) # avoid memory re-allocation each loop iter
+                if infalted_category_preds is not None:
+                    feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :], infalted_category_preds[u, v]) # avoid memory re-allocation each loop iter
+                else:
+                    feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :])
+                
                 count += 1
         feature_points_ls.resize(count, refcheck=False)
         return FeaturedPC(feature_points_ls)

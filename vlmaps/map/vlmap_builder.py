@@ -23,7 +23,7 @@ from vlmaps.utils.mapping_utils import (
 )
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
 import vlmaps.utils.traverse_pixels as raycast
-from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_torch)
+from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_torch, project_depth_features_pc)
 from vlmaps.utils.visualize_utils import visualize_rgb_map_3d
 
 #ROS2 stuff
@@ -102,6 +102,14 @@ class VLMapBuilderROS(Node):
         self.map_save_dir = self.map_config.map_save_dir #"/home/ergocub"
         os.makedirs(self.map_save_dir, exist_ok=True)
         self.map_save_path = self.map_save_dir + "/" + self.map_config.map_name  #"vlmaps.h5df"
+
+        ## Segmentation Classes to avoid mapping
+        classes_to_skip = self.map_config.get("classes_to_skip")
+        self.get_preds = False  #flag
+        self.inds_to_remove = []
+        if classes_to_skip is not None and len(classes_to_skip) > 0:
+            self.inds_to_remove = [self.map_config["labels"].index(x) for x in classes_to_skip]
+            self.get_preds = True
 
         # init lseg model
         self.lseg_model, self.lseg_transform, self.crop_size, self.base_size, self.norm_mean, self.norm_std = self._init_lseg()
@@ -217,20 +225,21 @@ class VLMapBuilderROS(Node):
         #### Segment image and extract features
         # get pixel-aligned LSeg features
         start = time.time()
-        pix_feats = get_lseg_feat(
-            self.lseg_model, rgb, ["other", "screen", "table", "closet", "chair", "shelf", "door", "wall", "ceiling", "floor", "human"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, vis=False
+        pix_feats, category_preds = get_lseg_feat(
+            self.lseg_model, rgb, self.map_config["labels"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, get_preds=self.get_preds
         )
         time_diff = time.time() - start
         self.get_logger().info(f"lseg features extracted in: {time_diff}")
 
         #### Formatted PC with aligned features to pixel
         start = time.time()
-        #featured_pc = self.project_depth_features_pc(depth, pix_feats, rgb, downsample_factor=20)
-        camera_pointcloud_xyz, features_per_point, color_per_point = project_depth_features_pc_torch(depth, pix_feats, rgb, self.calib_mat, max_depth=8.0, downsampling_factor = 20)
+        #featured_pc_2 = project_depth_features_pc(depth, pix_feats, rgb, self.calib_mat, self.inds_to_remove, category_preds, max_depth=8.0, downsample_factor=20)
+        camera_pointcloud_xyz, features_per_point, color_per_point, category_preds = project_depth_features_pc_torch(depth, pix_feats, rgb, self.calib_mat, self.inds_to_remove, category_preds, max_depth=8.0, downsampling_factor = 20)
         featured_pc = FeaturedPC()
         featured_pc.points_xyz = copy.deepcopy(camera_pointcloud_xyz)
         featured_pc.embeddings = copy.deepcopy(features_per_point)
         featured_pc.rgb = copy.deepcopy(color_per_point)
+        featured_pc.category_preds = copy.deepcopy(category_preds)  #TODO check if necessary
         self.get_logger().info(f"Time for executing project_depth_features_pc: {time.time() - start}")
 
         #### Transform PC into map frame
@@ -256,10 +265,10 @@ class VLMapBuilderROS(Node):
 
         #### Map update TODO: separate it in another thread
         start = time.time()
-        for (point, feature, rgb) in zip(featured_pc.points_xyz, featured_pc.embeddings, featured_pc.rgb):
+        for (point, feature, rgb, category_pred) in zip(featured_pc.points_xyz, featured_pc.embeddings, featured_pc.rgb, featured_pc.category_preds):
             
             row, col, height = base_pos2grid_id_3d(self.gs, self.cs, point[0], point[1], point[2])
-            if self._out_of_range(row, col, height, self.gs, self.vh):
+            if self._out_of_range(row, col, height, self.gs, self.vh) or (category_pred in self.inds_to_remove):
                 #self.get_logger().info(f"out of range with p0 {point[0]} p1 {point[1]} p2 {point[2]}")
                 continue
 
