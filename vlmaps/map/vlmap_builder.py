@@ -113,8 +113,8 @@ class VLMapBuilderROS(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         # subscribers init with callback
-        img_topic = "/cer/realsense_repeater/color_image"   # TODO initialize from config file
-        depth_topic = "/cer/realsense_repeater/depth_image"
+        img_topic = "/camera/rgbd/img"   # TODO initialize from config file
+        depth_topic = "/camera/rgbd/depth"
         self.img_sub = message_filters.Subscriber(self, Image, img_topic)
         self.depth_sub = message_filters.Subscriber(self, Image, depth_topic)
         self.tss = message_filters.ApproximateTimeSynchronizer([self.img_sub, self.depth_sub], 1, slop=0.3)        
@@ -240,6 +240,18 @@ class VLMapBuilderROS(Node):
         downsampled_coords = coords[:np.round(len(coords)/downsample_factor, 0).astype(int)]
         feature_points_ls = np.empty([len(downsampled_coords), 3], dtype=object)
         count = 0
+        # Inflate human segmentation mask
+        binary_mask = np.full_like(category_preds, False)
+        infalted_category_preds = category_preds
+        if self.inds_to_remove is not None:
+            for item in self.inds_to_remove:
+                binary_mask = binary_mask | (category_preds==item)
+            kernel = np.ones((20,20),np.uint8)
+            cv_img = binary_mask.astype(np.uint8)
+            infalted_mask = np.array(cv2.dilate(cv_img,kernel,iterations = 1), dtype=bool)
+            if not infalted_category_preds[infalted_mask]==[]:
+                infalted_category_preds[infalted_mask] = self.inds_to_remove[0]
+
         for item in downsampled_coords:
             # TODO optimize iteration formulation
             u = item[0]
@@ -249,8 +261,8 @@ class VLMapBuilderROS(Node):
                 z = z / depth_factor
                 x = ((v - cx) * z) / fx
                 y = ((u - cy) * z) / fy
-                if category_preds is not None:
-                    feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :], category_preds[u, v]) # avoid memory re-allocation each loop iter
+                if infalted_category_preds is not None:
+                    feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :], infalted_category_preds[u, v]) # avoid memory re-allocation each loop iter
                 else:
                     feature_points_ls[count] = FeturedPoint([x, y, z],copy.deepcopy(features_per_pixels[0, :, u, v]), color_img[u, v, :])
                 count += 1
@@ -265,7 +277,7 @@ class VLMapBuilderROS(Node):
         loop_timer = time.time()
         #### first do a TF check between the camera and map frame
         target_frame="map"
-        source_frame="depth"
+        source_frame="realsense_rgb_frame"
         try:
             transform = self.tf_buffer.lookup_transform(
                     target_frame,
@@ -278,7 +290,7 @@ class VLMapBuilderROS(Node):
                 return
         self.get_logger().info('Transform available')
         # Check covariance: TODO is it enough to check only two values?
-        if not (abs(self.amcl_cov.max()) < 0.01) and (abs(self.amcl_cov.min()) < 0.01):
+        if not (abs(self.amcl_cov.max()) < 1.01) and (abs(self.amcl_cov.min()) < 1.01):
             self.get_logger().info(f'Covariance too big: skipping callback untill')
             return
 
