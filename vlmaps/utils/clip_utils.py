@@ -221,7 +221,7 @@ def get_lseg_score(
 
         # average the features
         if avg_mode == 0:
-            text_feats = text_feats.reshape((-1, len(mul_tmp), text_feats.shape[-1]))
+            text_feats = text_feats.reshape((-1, len(mul_tmp), text_feats.shape[-1])) # seems redundant unless its because you need a copy?
             text_feats = np.mean(text_feats, axis=1)
 
         map_feats = lseg_map.reshape((-1, lseg_map.shape[-1]))

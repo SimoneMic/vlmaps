@@ -22,7 +22,8 @@ def get_lseg_feat(
     base_size=520,
     norm_mean=[0.5, 0.5, 0.5],
     norm_std=[0.5, 0.5, 0.5],
-    vis=False,
+    get_preds=False,
+    vis=False
 ):
     vis_image = image.copy()
     image = transform(image).unsqueeze(0).to(device)
@@ -66,7 +67,7 @@ def get_lseg_feat(
         with torch.cuda.device_of(image):
             with torch.no_grad():
                 outputs = image.new().resize_(batch, model.out_c, ph, pw).zero_().to(device)
-                if vis:
+                if get_preds or vis:
                     logits_outputs = image.new().resize_(batch, len(labels), ph, pw).zero_().to(device)
             count_norm = image.new().resize_(batch, 1, ph, pw).zero_().to(device)
         # grid evaluation
@@ -84,35 +85,38 @@ def get_lseg_feat(
                     output, logits = model(pad_crop_img, labels)
                 cropped = crop_image(output, 0, h1 - h0, 0, w1 - w0)
                 outputs[:, :, h0:h1, w0:w1] += cropped
-                if vis:
+                if get_preds or vis:
                     cropped_logits = crop_image(logits, 0, h1 - h0, 0, w1 - w0)
                     logits_outputs[:, :, h0:h1, w0:w1] += cropped_logits
                 count_norm[:, :, h0:h1, w0:w1] += 1
         assert (count_norm == 0).sum() == 0
         outputs = outputs / count_norm
         outputs = outputs[:, :, :height, :width]
-        if vis:
+        if get_preds or vis:
             logits_outputs = logits_outputs / count_norm
             logits_outputs = logits_outputs[:, :, :height, :width]
     # outputs = resize_image(outputs, h, w, **{'mode': 'bilinear', 'align_corners': True})
     # outputs = resize_image(outputs, image.shape[0], image.shape[1], **{'mode': 'bilinear', 'align_corners': True})
     outputs = outputs.cpu()
     outputs = outputs.numpy()  # B, D, H, W
-    if vis:
+    if get_preds or vis:
         predicts = [torch.max(logit, 0)[1].cpu().numpy() for logit in logits_outputs]
         pred = predicts[0]
-        new_palette = get_new_pallete(len(labels))
-        mask, patches = get_new_mask_pallete(pred, new_palette, out_label_flag=True, labels=labels)
-        seg = mask.convert("RGBA")
-        cv2.imshow("image", vis_image[:, :, [2, 1, 0]])
-        #cv2.waitKey()
-        fig = plt.figure()
-        plt.imshow(seg)
-        plt.legend(handles=patches, loc="upper left", bbox_to_anchor=(1.0, 1), prop={"size": 20})
-        plt.axis("off")
 
-        plt.tight_layout()
-        plt.show()
-        cv2.waitKey()
+        if vis:
+            new_palette = get_new_pallete(len(labels))
+            mask, patches = get_new_mask_pallete(pred, new_palette, out_label_flag=True, labels=labels)
+            seg = mask.convert("RGBA")
+            cv2.imshow("image", vis_image[:, :, [2, 1, 0]])
+            fig = plt.figure()
+            plt.imshow(seg)
+            plt.legend(handles=patches, loc="upper left", bbox_to_anchor=(1.0, 1), prop={"size": 20})
+            plt.axis("off")
 
-    return outputs
+            plt.tight_layout()
+            plt.show()
+            cv2.waitKey()
+
+        return outputs, pred
+
+    return outputs, None
