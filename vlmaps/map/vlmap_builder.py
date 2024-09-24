@@ -35,6 +35,8 @@ from sensor_msgs.msg import Image
 import message_filters
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
+from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
+from geometry_msgs.msg import TransformStamped
 
 import math
 import copy
@@ -76,13 +78,14 @@ class VLMapBuilderROS(Node):
     ):
         super().__init__('VLMap_builder_node')
         self.map_config = map_config
-        self.amcl_cov = np.full([36], 0.2)  #init with an high covariance value for each element
-        # tf buffer init
+        self.amcl_cov = np.full([36], 0.2)  #init with a high covariance value for each element
+        ### tf2 buffer init
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        # subscribers init with callback
-        img_topic = self.map_config.img_topic_name      #"/cer/realsense_repeater/color_image"
-        depth_topic = self.map_config.depth_topic_name         #"/cer/realsense_repeater/depth_image"
+        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
+        ### ROS2 subscribers init with callback
+        img_topic = self.map_config.img_topic_name              #"/cer/realsense_repeater/color_image"
+        depth_topic = self.map_config.depth_topic_name          #"/cer/realsense_repeater/depth_image"
         self.img_sub = message_filters.Subscriber(self, Image, img_topic)
         self.depth_sub = message_filters.Subscriber(self, Image, depth_topic)
         self.tss = message_filters.ApproximateTimeSynchronizer([self.img_sub, self.depth_sub], 1, slop=0.3)        
@@ -93,17 +96,17 @@ class VLMapBuilderROS(Node):
             self.amcl_callback,
             10
         )
-        ## First part of create_mobile_base_map for init stuff
-        # access config info
+        
+
+        ### General config info
         maximum_height = self.map_config.maximum_height
         self.cs = self.map_config.cell_size
         self.gs = self.map_config.grid_size
-
-        self.map_save_dir = self.map_config.map_save_dir #"/home/ergocub"
+        self.map_save_dir = self.map_config.map_save_dir
         os.makedirs(self.map_save_dir, exist_ok=True)
-        self.map_save_path = self.map_save_dir + "/" + self.map_config.map_name  #"vlmaps.h5df"
+        self.map_save_path = self.map_save_dir + "/" + self.map_config.map_name     #"vlmaps.h5df"
 
-        ## Segmentation Classes to avoid mapping
+        ## Segmentation of Classes we want to avoid mapping
         classes_to_skip = self.map_config.get("classes_to_skip")
         self.get_preds = False  #flag
         self.inds_to_remove = []
@@ -111,10 +114,10 @@ class VLMapBuilderROS(Node):
             self.inds_to_remove = [self.map_config["labels"].index(x) for x in classes_to_skip]
             self.get_preds = True
 
-        # init lseg model
+        ### init lseg model
         self.lseg_model, self.lseg_transform, self.crop_size, self.base_size, self.norm_mean, self.norm_std = self._init_lseg()
 
-        # init the map
+        ### init the map
         (
             self.vh,
             self.grid_feat,
@@ -129,12 +132,10 @@ class VLMapBuilderROS(Node):
 
         self.cv_bridge = CvBridge()
 
-        #### Iteration counter
+        ### Iteration counter of the mapping callback
         self.frame_i = 0
         # load camera calib matrix in config
         self.calib_mat = np.array(self.map_config.cam_calib_mat).reshape((3, 3))
-        #self.cv_map = np.zeros((self.gs, self.gs, 3), dtype=np.uint8)
-        #self.height_map = -100 * np.ones((self.gs, self.gs), dtype=np.float32)
 
         ### Make more explicit the calib intrinsics:
         self.focal_lenght_x = self.calib_mat[0,0]       #fx
@@ -143,28 +144,48 @@ class VLMapBuilderROS(Node):
         self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
         self.target_frame = self.map_config.target_frame     #"map"
-        self.source_frame = self.map_config.source_frame     #"depth"
         self.amcl_cov_threshold = self.map_config.amcl_cov_threshold
         if self.amcl_cov_threshold < 0:
             self.amcl_cov_threshold = 0.01
 
-        # TODO: add to config file
+        ### Raycast config
         self.use_raycast = self.map_config.use_raycasting
         self.raycasting_algorythm = self.map_config.raycasting_algorythm    #"distance_based"
         self.voxel_offset = self.map_config.voxel_offset
         self.raycast_distance_threshold = self.map_config.raycast_distance_threshold
-        # Visualization
+        ### Visualization
+        self.map_frame_name = "map"
+        self.vlmap_frame_name = "vlmap"
         self.pointcloud_pub = self.create_publisher(PointCloud2, "vlmap",10)
+        self.static_tf_published = False
+        # Publish static transform map -> vlmap frame
+
+    def publish_static_transform(self):
+        if self.static_tf_published:
+            return
+        tf = TransformStamped()
+        tf.header.stamp = self.get_clock().now().to_msg()
+        tf.header.frame_id = self.map_frame_name
+        tf.child_frame_id = self.vlmap_frame_name
+        tf.transform.translation.x = (self.gs * self.cs) / 2
+        tf.transform.translation.y = (self.gs * self.cs) / 2
+        tf.transform.translation.z = 0.0
+        tf.transform.rotation.x = 0.0
+        tf.transform.rotation.y = 0.0
+        tf.transform.rotation.z = -1.0
+        tf.transform.rotation.w = 0.0
+        self.tf_static_broadcaster.sendTransform(tf)
+        self.static_tf_published = True
 
 
     def xyzrgb_array_to_pointcloud2(self, points, colors, stamp=None, frame_id=None, seq=None):
         '''
         Create a sensor_msgs.PointCloud2 from an array
-        of points.
+        of points and a synched array of color values.
         '''
 
         header = Header()
-        header.frame_id = "map"
+        header.frame_id = self.vlmap_frame_name
         header.stamp = self.get_clock().now().to_msg()
 
         ros_dtype = PointField.FLOAT32
@@ -188,7 +209,7 @@ class VLMapBuilderROS(Node):
 
     def sensors_callback(self, img_msg, depth_msg):
         """
-        build the 3D map centering at the first base frame
+        build the 3D map centered at the first base frame
         """
 
         loop_timer = time.time()
@@ -256,7 +277,7 @@ class VLMapBuilderROS(Node):
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
 
 
-        #### Raycast TODO: move it in a separate thread
+        #### Raycast
         if ((self.frame_i != 0) or (self.loaded_map == True)) and self.use_raycast:
 
             #map_to_cam_tf = np.linalg.inv(transform_np)
@@ -266,7 +287,7 @@ class VLMapBuilderROS(Node):
             self.remove_map_voxels(voxels_to_clear)
 
 
-        #### Map update TODO: separate it in another thread
+        #### Map update - TODO: separate it in another thread
         start = time.time()
         for (point, feature, rgb, category_pred) in zip(featured_pc.points_xyz, featured_pc.embeddings, featured_pc.rgb, featured_pc.category_preds):
             
@@ -324,8 +345,9 @@ class VLMapBuilderROS(Node):
         time_save = time.time()
         mask = (self.grid_pos > 0).all(axis=1)
         color = self.grid_rgb[mask]
-        points = self.grid_pos[mask]
+        points = self.grid_pos[mask] * self.cs  #scale it to meters
         msg = self.xyzrgb_array_to_pointcloud2(points, color)
+        self.publish_static_transform()
         self.get_logger().info(f"Time for creating pointcloud2 msg: {time.time() - time_save}")
         self.pointcloud_pub.publish(msg)
         return
