@@ -5,11 +5,10 @@ grid_size: 1000
 cell_size: 0.05
 map_save_dir: "/home/ergocub"
 map_name: "vlmaps.h5df"
-img_topic_name: "/camera/rgbd/img"
-depth_topic_name: "/camera/rgbd/depth"
-amcl_cov_threshold: 1.01
+img_topic_name: "/cer/realsense_repeater/color_image"
+depth_topic_name: "/cer/realsense_repeater/depth_image"
+amcl_cov_threshold: 0.02
 target_frame: "map"
-source_frame: "realsense" #deprecated
 use_raycasting: True
 raycasting_algorythm: "distance_based"
 voxel_offset: 1

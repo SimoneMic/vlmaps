@@ -42,6 +42,8 @@ import math
 import copy
 import torch
 
+from ros2_vlmaps_interfaces.srv import EnableMapping
+
 
 
 def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
@@ -158,7 +160,18 @@ class VLMapBuilderROS(Node):
         self.vlmap_frame_name = "vlmap"
         self.pointcloud_pub = self.create_publisher(PointCloud2, "vlmap",10)
         self.static_tf_published = False
-        # Publish static transform map -> vlmap frame
+        ### Enable Mapping Service
+        self.enable_mapping_srv = self.create_service(EnableMapping, 'vlmap_builder/enable_mapping', self.enable_mapping_callback)
+        self.enable_mapping = True  # TODO add to config file
+    
+    def enable_mapping_callback(self, request, response):
+        try:
+            self.enable_mapping = request.enable_flag
+            response.is_ok = True
+        except:
+            response.is_ok = False
+            response.error_msg = "[enable_mapping_callback] An exception occurred"
+
 
     def publish_static_transform(self):
         if self.static_tf_published:
@@ -211,6 +224,9 @@ class VLMapBuilderROS(Node):
         """
         build the 3D map centered at the first base frame
         """
+        if not self.enable_mapping:
+            print("Mapping not enabled: skipping callback")
+            return
 
         loop_timer = time.time()
         #### first do a TF check between the camera and map frame

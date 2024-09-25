@@ -1,0 +1,4 @@
+bool enable_flag
+---
+bool is_ok
+string error_msg
