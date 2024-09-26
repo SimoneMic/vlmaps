@@ -292,7 +292,7 @@ def get_new_mask_pallete(npimg, new_palette, out_label_flag=False, labels=None, 
         for i, index in enumerate(u_index):
             if index in ignore_ids_list:
                 continue
-            label = labels[index]
+            label = labels[int(index)]
             cur_color = [
                 new_palette[index * 3] / 255.0,
                 new_palette[index * 3 + 1] / 255.0,

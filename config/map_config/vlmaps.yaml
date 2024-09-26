@@ -11,7 +11,7 @@ amcl_cov_threshold: 0.02
 target_frame: "map"
 use_raycasting: True
 raycasting_algorythm: "distance_based"
-voxel_offset: 1
+voxel_offset: 3
 raycast_distance_threshold: 0.9
 
 potential_obstacle_names:

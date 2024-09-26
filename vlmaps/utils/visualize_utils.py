@@ -13,7 +13,7 @@ class Visualizer(Process):
         self.name = name
 
     def run(self):
-        o3d.visualization.draw_geometries_with_vertex_selection([self.pcd], window_name=self.name)
+        o3d.visualization.draw_geometries([self.pcd], window_name=self.name)
 
 def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray, window_name: str, voxel_size=1.0):
     grid_rgb = rgb / 255.0
@@ -22,10 +22,10 @@ def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray, window_name: str, voxe
     pcd.points = o3d.utility.Vector3dVector(pc)
     pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
     voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd,
-                                                            voxel_size=0.5)
+                                                            voxel_size=1.0)
     #o3d.visualization.draw_geometries([voxel_grid])
     # visualize the point cloud
-    Visualizer(pcd, window_name).start()
+    Visualizer(voxel_grid, window_name).start()
 
 def compute_point_cloud_difference(pcd_1, pcd_2, distance_threshold = 0.01):
     """
