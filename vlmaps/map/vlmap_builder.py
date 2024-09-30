@@ -159,10 +159,12 @@ class VLMapBuilderROS(Node):
         self.map_frame_name = "map"
         self.vlmap_frame_name = "vlmap"
         self.pointcloud_pub = self.create_publisher(PointCloud2, "vlmap",10)
+        self.seg_img_pub = self.create_publisher(Image, "image", 1)
         self.static_tf_published = False
         ### Enable Mapping Service
         self.enable_mapping_srv = self.create_service(EnableMapping, 'vlmap_builder/enable_mapping', self.enable_mapping_callback)
         self.enable_mapping = True  # TODO add to config file
+        self.seg_vis = self.map_config.seg_vis
     
     def enable_mapping_callback(self, request, response):
         try:
@@ -241,9 +243,9 @@ class VLMapBuilderROS(Node):
                         f'Could not transform {depth_msg.header.frame_id} to {self.target_frame}: {ex}')
                 return
         # Check covariance: TODO is it enough to check only two values?
-        if not (abs(self.amcl_cov.max()) < self.amcl_cov_threshold) and (abs(self.amcl_cov.min()) < self.amcl_cov_threshold):
-            self.get_logger().info(f'Covariance too big: skipping callback untill amcl converges')
-            return
+        # if not (abs(self.amcl_cov.max()) < self.amcl_cov_threshold) and (abs(self.amcl_cov.min()) < self.amcl_cov_threshold):
+        #     self.get_logger().info(f'Covariance too big: skipping callback untill amcl converges')
+        #     return
 
         ## Convert tf2 transform to np array components
         transform_pose_np = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
@@ -262,9 +264,14 @@ class VLMapBuilderROS(Node):
         #### Segment image and extract features
         # get pixel-aligned LSeg features
         start = time.time()
-        pix_feats, category_preds = get_lseg_feat(
-            self.lseg_model, rgb, self.map_config["labels"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, get_preds=self.get_preds
-        )
+        if self.seg_vis:
+            pix_feats, category_preds, seg_img = get_lseg_feat(
+                self.lseg_model, rgb, self.map_config["labels"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, get_preds=self.get_preds, vis=self.seg_vis
+            )
+        else:
+            pix_feats, category_preds = get_lseg_feat(
+                self.lseg_model, rgb, self.map_config["labels"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, get_preds=self.get_preds, vis=self.seg_vis
+            )
         time_diff = time.time() - start
         self.get_logger().info(f"lseg features extracted in: {time_diff}")
 
@@ -366,6 +373,9 @@ class VLMapBuilderROS(Node):
         self.publish_static_transform()
         self.get_logger().info(f"Time for creating pointcloud2 msg: {time.time() - time_save}")
         self.pointcloud_pub.publish(msg)
+        if self.seg_vis:
+            img_msg = self.cv_bridge.cv2_to_imgmsg(np.array(seg_img))
+            self.seg_img_pub.publish(img_msg)
         return
 
     # TODO Let's do this in background on a separate thread, global_pc should not be already added

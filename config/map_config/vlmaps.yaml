@@ -8,11 +8,12 @@ map_name: "vlmaps.h5df"
 img_topic_name: "/cer/realsense_repeater/color_image"
 depth_topic_name: "/cer/realsense_repeater/depth_image"
 amcl_cov_threshold: 0.02
-target_frame: "map"
+target_frame: "odom"
 use_raycasting: True
 raycasting_algorythm: "distance_based"
 voxel_offset: 3
 raycast_distance_threshold: 0.9
+seg_vis: True
 
 potential_obstacle_names:
   - "chair"
