@@ -35,7 +35,6 @@ def get_segment_islands_pos(segment_map, label_id, detect_internal_contours=Fals
 
     return contours_list, centers_list, bbox_list, hierarchy
 
-
 def find_closest_points_between_two_contours(obs_map, contour_a, contour_b):
     a = np.zeros_like(obs_map, dtype=np.uint8)
     b = np.zeros_like(obs_map, dtype=np.uint8)
@@ -49,7 +48,6 @@ def find_closest_points_between_two_contours(obs_map, contour_a, contour_b):
     id = np.argmin(dists)
     ida, idb = np.unravel_index(id, dists.shape)
     return [rows_a[ida], cols_a[ida]], [rows_b[idb], cols_b[idb]]
-
 
 def point_in_contours(obs_map, contours_list, point):
     """

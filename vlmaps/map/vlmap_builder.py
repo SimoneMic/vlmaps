@@ -23,7 +23,7 @@ from vlmaps.utils.mapping_utils import (
 )
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
 import vlmaps.utils.traverse_pixels as raycast
-from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_torch, project_depth_features_pc)
+from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_torch)
 from vlmaps.utils.visualize_utils import visualize_rgb_map_3d
 
 #ROS2 stuff
@@ -252,8 +252,7 @@ class VLMapBuilderROS(Node):
         ## Let's get an SE(4) matrix form
         transform_np = quaternion_matrix(transform_quat_np)
         transform_np[0:3, -1] = transform_pose_np
-        #### Convert Inputs formats:
-        ## Convert the rgb format from ros to OpenCv
+        ## Convert the rgb format from ros2 to OpenCv
         rgb = self.cv_bridge.imgmsg_to_cv2(img_msg) # TODO check image color encoding
         ## Convert depth from ros2 to OpenCv
         depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, "passthrough")  # TODO check image color encoding
@@ -464,14 +463,6 @@ class VLMapBuilderROS(Node):
                         self.grid_rgb[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_rgb[0], dtype=np.uint8)
                         self.occupied_ids[voxel[0], voxel[1], voxel[2]] = -1
                 self.get_logger().info(f"Time for REMOVING INDICES from map: {time.time() - time_start}")
-        #if voxels_to_clear.size != 0:
-        #        time_map_raycast = time.time()
-        #        for voxel in voxels_to_clear:
-        #            self.grid_feat[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_feat[0], dtype=np.float32)    # TODO parameterize also the type?
-        #            self.grid_pos[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_pos[0], dtype=np.int32)
-        #            self.grid_rgb[self.occupied_ids[voxel[0], voxel[1], voxel[2]]] = np.zeros_like(self.grid_rgb[0], dtype=np.uint8)
-        #            self.occupied_ids[voxel[0], voxel[1], voxel[2]] = -1
-        #        self.get_logger().info(f"Time for REMOVING INDICES from map: {time.time() - time_map_raycast}")
         return True
 
     # Simply store the covariance values, will be analyze

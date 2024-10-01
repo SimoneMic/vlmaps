@@ -6,7 +6,7 @@ import torch
 
 from matplotlib import pyplot as plt
 
-from vlmaps.utils.mapping_utils import *
+from vlmaps.utils.mapping_utils import get_new_pallete, get_new_mask_pallete
 
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
 from vlmaps.lseg.additional_utils.models import resize_image, pad_image, crop_image

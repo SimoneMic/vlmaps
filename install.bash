@@ -1,9 +1,5 @@
 #!/bin/bash
+sudo apt update
+sudo apt install -y python3-opencv python3-shapely
 pip install -r requirements.txt
 
-conda install habitat-sim=0.2.2 -c conda-forge -c aihabitat -y
-
-cd ~
-git clone --recursive https://github.com/cvg/Hierarchical-Localization/
-cd Hierarchical-Localization/
-python -m pip install -e .

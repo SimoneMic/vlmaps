@@ -11,18 +11,8 @@ from scipy.ndimage import binary_closing, binary_dilation, gaussian_filter
 import torch
 
 from vlmaps.utils.clip_utils import get_text_feats_multiple_templates
-from vlmaps.utils.visualize_utils import pool_3d_label_to_2d    
+from vlmaps.utils.visualize_utils import pool_3d_label_to_2d
 
-# from utils.ai2thor_constant import ai2thor_class_list
-# from utils.clip_mapping_utils import load_map
-# from utils.planning_utils import (
-#     find_similar_category_id,
-#     get_dynamic_obstacles_map,
-#     get_lseg_score,
-#     get_segment_islands_pos,
-#     mp3dcat,
-#     segment_lseg_map,
-# )
 from vlmaps.map.vlmap_builder import VLMapBuilderROS
 from vlmaps.utils.mapping_utils import load_3d_map
 from vlmaps.map.map import Map
@@ -74,24 +64,6 @@ class VLMap(Map):
         print("Shutting down ros node")
         self.map_builder.destroy_node()
         rclpy.shutdown()
-
-
-    #def create_map(self, data_dir: Union[Path, str]) -> None:
-    #    print(f"Creating map for scene at: ", data_dir)
-    #    self._setup_paths(data_dir)
-    #    self.map_builder = VLMapBuilder(
-    #        self.data_dir,
-    #        self.map_config,
-    #        self.pose_path,
-    #        self.rgb_paths,
-    #        self.depth_paths,
-    #        self.base2cam_tf,
-    #        self.base_transform,
-    #    )
-    #    if self.map_config.pose_info.pose_type == "mobile_base":
-    #        self.map_builder.create_mobile_base_map()
-    #    elif self.map_config.pose_info.pose_type == "camera":
-    #        self.map_builder.create_camera_map()
 
     def load_map(self, data_dir: str) -> bool:
         self._setup_paths(data_dir)
@@ -157,24 +129,16 @@ class VLMap(Map):
         )  # score for name and other
         return self.scores_mat
 
-    def index_map(self, language_desc: str, with_init_cat: bool = True):
-        if with_init_cat and self.scores_mat is not None and self.categories is not None:
-            cat_id = find_similar_category_id(language_desc, self.categories)
-            scores_mat = self.scores_mat
-        else:
-            if with_init_cat:
-                raise Exception(
-                    "Categories are not preloaded. Call init_categories(categories: List[str]) to initialize categories."
-                )
-            scores_mat = get_lseg_score(
-                self.clip_model,
-                [language_desc],
-                self.grid_feat,
-                self.clip_feat_dim,
-                use_multiple_templates=True,
-                add_other=True,
-            )  # score for name and other
-            cat_id = 0
+    def index_map(self, language_desc: str):
+        scores_mat = get_lseg_score(
+            self.clip_model,
+            [language_desc],
+            self.grid_feat,
+            self.clip_feat_dim,
+            use_multiple_templates=True,
+            add_other=True,
+        )  # score for name and other
+        cat_id = 0
 
         max_ids = np.argmax(scores_mat, axis=1)
         mask = max_ids == cat_id

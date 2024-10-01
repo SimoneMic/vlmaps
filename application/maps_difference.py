@@ -14,18 +14,11 @@ import threading
     config_name="map_indexing_cfg.yaml",
 )
 def main(config: DictConfig) -> None:
-    #data_dir = Path(config.data_paths.vlmaps_data_dir) / "vlmaps_dataset"
-    #data_dirs = sorted([x for x in data_dir.iterdir() if x.is_dir()])
     data_dirs = "~/vlmaps"
     vlmap_raytrace = VLMap(config.map_config, data_dir=data_dirs[config.scene_id])
     vlmap_std = VLMap(config.map_config, data_dir=data_dirs[config.scene_id])
-    #vlmap.load_map(data_dirs[config.scene_id])
     vlmap_std.load_map("/home/ergocub/vlmaps.h5df")     
     vlmap_raytrace.load_map("/home/ergocub/vlmaps_raytrace_tensorized.h5df")
-    #thread_std = threading.Thread(target=visualize_rgb_map_3d, args=(vlmap_std.grid_pos, vlmap_std.grid_rgb))
-    #thread_std.start()
-    #thread_ray = threading.Thread(target=visualize_rgb_map_3d, args=(vlmap_raytrace.grid_pos, vlmap_raytrace.grid_rgb))
-    #thread_ray.start()
     visualize_rgb_map_3d(vlmap_std.grid_pos, vlmap_std.grid_rgb, "vlmap_std")
     visualize_rgb_map_3d(vlmap_raytrace.grid_pos, vlmap_raytrace.grid_rgb, "vlmap_raytrace")
     diff = compute_point_cloud_difference(vlmap_std.grid_pos, vlmap_raytrace.grid_pos)

@@ -21,11 +21,8 @@ from vlmaps.utils.matterport3d_categories import mp3dcat
 from vlmaps.utils.visualize_utils import (
     pool_3d_label_to_2d,
     pool_3d_rgb_to_2d,
-    visualize_masked_map_2d,
-    visualize_heatmap_2d,
     visualize_heatmap_3d,
     visualize_masked_map_3d,
-    get_heatmap_from_mask_2d,
     get_heatmap_from_mask_3d,
 )
 
@@ -72,12 +69,7 @@ class VLMapPublisher(Node):
 
     def index_map_callback(self, request, response):
         try:
-            if self.init_categories:
-                self.vlmap.init_categories(self.categories)
-                mask = self.vlmap.index_map(request.indexing_string, with_init_cat=True)
-                self.init_categories = False    # Do it once
-            else:
-                mask = self.vlmap.index_map(request.indexing_string, with_init_cat=False)
+            mask = self.vlmap.index_map(request.indexing_string)
 
             if self.config.index_2d:
                 mask_2d = pool_3d_label_to_2d(mask, self.vlmap.grid_pos, self.config.params.gs)
@@ -89,10 +81,10 @@ class VLMapPublisher(Node):
                 #self.publish_markers(mask_2d, rgb_2d)
             else:
                 visualize_masked_map_3d(self.vlmap.grid_pos, mask, self.vlmap.grid_rgb)
-                heatmap = get_heatmap_from_mask_3d(
-                    self.vlmap.grid_pos, mask, cell_size=self.config.params.cs, decay_rate=self.config.decay_rate
-                )
-                visualize_heatmap_3d(self.vlmap.grid_pos, heatmap, self.vlmap.grid_rgb)
+                #heatmap = get_heatmap_from_mask_3d(
+                #    self.vlmap.grid_pos, mask, cell_size=self.config.params.cs, decay_rate=self.config.decay_rate
+                #)
+                #visualize_heatmap_3d(self.vlmap.grid_pos, heatmap, self.vlmap.grid_rgb)
         except Exception as ex:
             print(f"Unexpected exception: {ex=}, {type(ex)=}")
             response.is_ok = False
