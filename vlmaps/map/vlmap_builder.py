@@ -156,7 +156,7 @@ class VLMapBuilderROS(Node):
         self.voxel_offset = self.map_config.voxel_offset
         self.raycast_distance_threshold = self.map_config.raycast_distance_threshold
         ### Visualization
-        self.map_frame_name = "map"
+        self.map_frame_name = self.target_frame
         self.vlmap_frame_name = "vlmap"
         self.pointcloud_pub = self.create_publisher(PointCloud2, "vlmap",10)
         self.static_tf_published = False
@@ -173,11 +173,13 @@ class VLMapBuilderROS(Node):
             response.error_msg = "[enable_mapping_callback] An exception occurred"
 
 
-    def publish_static_transform(self):
+    def publish_static_transform(self, stamp):
         if self.static_tf_published:
             return
         tf = TransformStamped()
-        tf.header.stamp = self.get_clock().now().to_msg()
+        #tf.header.stamp = self.get_clock().now().to_msg()
+        #tf.header.frame_id = self.map_frame_name
+        tf.header.stamp = stamp
         tf.header.frame_id = self.map_frame_name
         tf.child_frame_id = self.vlmap_frame_name
         tf.transform.translation.x = (self.gs * self.cs) / 2
@@ -275,7 +277,7 @@ class VLMapBuilderROS(Node):
         featured_pc.points_xyz = copy.deepcopy(camera_pointcloud_xyz)
         featured_pc.embeddings = copy.deepcopy(features_per_point)
         featured_pc.rgb = copy.deepcopy(color_per_point)
-        if category_preds is not None:
+        if category_preds is not None and self.get_preds:
             featured_pc.category_preds = copy.deepcopy(category_preds)  #TODO check if necessary
         else:
             featured_pc.category_preds = np.full_like(featured_pc.rgb, -1)
@@ -362,7 +364,8 @@ class VLMapBuilderROS(Node):
         color = self.grid_rgb[mask]
         points = self.grid_pos[mask] * self.cs  #scale it to meters
         msg = self.xyzrgb_array_to_pointcloud2(points, color)
-        self.publish_static_transform()
+        msg.header.stamp = depth_msg.header.stamp
+        self.publish_static_transform(depth_msg.header.stamp)
         self.get_logger().info(f"Time for creating pointcloud2 msg: {time.time() - time_save}")
         self.pointcloud_pub.publish(msg)
         return

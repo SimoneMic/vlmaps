@@ -16,7 +16,7 @@ from vlmaps.utils.visualize_utils import pool_3d_label_to_2d
 from vlmaps.map.vlmap_builder import VLMapBuilderROS
 from vlmaps.utils.mapping_utils import load_3d_map
 from vlmaps.map.map import Map
-from vlmaps.utils.index_utils import find_similar_category_id, get_dynamic_obstacles_map_3d, get_segment_islands_pos
+from vlmaps.utils.index_utils import get_dynamic_obstacles_map_3d, get_segment_islands_pos
 from vlmaps.utils.clip_utils import get_lseg_score
 import rclpy
 
