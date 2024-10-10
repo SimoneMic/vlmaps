@@ -13,6 +13,8 @@ use_raycasting: True
 raycasting_algorythm: "distance_based"
 voxel_offset: 3
 raycast_distance_threshold: 0.9
+seg_vis: False
+live_indexing: True
 
 potential_obstacle_names:
   - "chair"
