@@ -51,7 +51,7 @@ def main(config: DictConfig) -> None:
                 heatmap = get_heatmap_from_mask_2d(mask_2d, cell_size=config.params.cs, decay_rate=config.decay_rate)
                 visualize_heatmap_2d(rgb_2d, heatmap)
         else:
-            visualize_masked_map_3d(vlmap.grid_pos, mask, vlmap.grid_rgb, "vlmaps interest")
+            visualize_masked_map_3d(vlmap.grid_pos, mask, vlmap.grid_rgb, f"QUERIED CLASS: {cat}")
             if config.get_heatmap:
                 heatmap = get_heatmap_from_mask_3d(
                     vlmap.grid_pos, mask, cell_size=config.params.cs, decay_rate=config.decay_rate
