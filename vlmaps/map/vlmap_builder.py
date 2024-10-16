@@ -24,10 +24,11 @@ from vlmaps.utils.mapping_utils import (
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
 import vlmaps.utils.traverse_pixels as raycast
 from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_torch, project_depth_features_pc)
-from vlmaps.utils.visualize_utils import visualize_rgb_map_3d
+from vlmaps.utils.visualize_utils import xyzrgb_array_to_pointcloud2
 from vlmaps.utils.clip_utils import get_lseg_score
 
 #ROS2 stuff
+from ros2_vlmaps_interfaces.srv import IndexMap
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformException
@@ -171,9 +172,9 @@ class VLMapBuilderROS(Node):
             self.seg_img_pub = self.create_publisher(Image, "seg_image", 1)
 
         if self.map_config.live_indexing:
-            self.query_sub = self.create_subscription(String, "query", self.query_callback, 10)
+            self.index_map_srv = self.create_service(IndexMap, 'index_map', self.index_map_callback) 
             self._init_clip()
-            self.query_pub = self.create_publisher(PointCloud2, "vlmap_indexed", 10)
+            self.index_pub = self.create_publisher(PointCloud2, "vlmap_index_result", 10)
     
     def enable_mapping_callback(self, request, response):
         try:
@@ -183,16 +184,25 @@ class VLMapBuilderROS(Node):
             response.is_ok = False
             response.error_msg = "[enable_mapping_callback] An exception occurred"
 
-    def query_callback(self, query):
-        seg_mask = self.index_map(query.data)
-        mask_rgb = self.grid_rgb.copy()
-        mask_rgb[:] = [0, 0, 255]
-        mask_rgb[seg_mask] = [255, 0, 0]
-        mask = (self.grid_pos > 0).all(axis=1)
-        color = mask_rgb[mask]
-        points = self.grid_pos[mask] * 0.05  #scale it to meters
-        msg = self.xyzrgb_array_to_pointcloud2(points, color)
-        self.query_pub.publish(msg)
+    def index_map_callback(self, request, response):
+        try:
+            seg_mask = self.index_map(request.indexing_string)
+            mask_rgb = self.grid_rgb.copy()
+            mask_rgb[:] = [0, 0, 255]
+            mask_rgb[seg_mask] = [255, 0, 0]
+            mask = (self.grid_pos > 0).all(axis=1)
+            color = mask_rgb[mask]
+            points = self.grid_pos[mask] * 0.05  #scale it to meters
+            msg = xyzrgb_array_to_pointcloud2(self.get_clock().now().to_msg(), points, color)
+            self.index_pub.publish(msg)
+        except Exception as ex:
+            print(f"Unexpected exception: {ex=}, {type(ex)=}")
+            response.is_ok = False
+            response.error_msg = "[index_map_callback] An exception occurred:"
+            return response
+        response.is_ok = True
+        return response
+
 
     def _init_clip(self, clip_version="ViT-B/32"):
         if hasattr(self, "clip_model"):
@@ -251,35 +261,6 @@ class VLMapBuilderROS(Node):
         self.tf_static_broadcaster.sendTransform(tf)
         self.static_tf_published = True
 
-
-    def xyzrgb_array_to_pointcloud2(self, points, colors, stamp=None, frame_id=None, seq=None):
-        '''
-        Create a sensor_msgs.PointCloud2 from an array
-        of points and a synched array of color values.
-        '''
-
-        header = Header()
-        header.frame_id = self.vlmap_frame_name
-        header.stamp = self.get_clock().now().to_msg()
-
-        ros_dtype = PointField.FLOAT32
-        dtype = np.float32
-        itemsize = np.dtype(dtype).itemsize
-        fields = [PointField(name=n, offset=i*itemsize, datatype=ros_dtype, count=1) for i, n in enumerate('xyzrgb')]
-        nbytes = 6
-        xyzrgb = np.array(np.hstack([points, colors/255]), dtype=np.float32)
-        #xyzrgb = np.array(points_ren, dtype=np.float32)
-        msg = PointCloud2(header=header, 
-                          height = 1, 
-                          width= points.shape[0], 
-                          fields=fields, 
-                          is_dense= False, 
-                          is_bigedian=False, 
-                          point_step=(itemsize * nbytes), 
-                          row_step = (itemsize * nbytes * points.shape[0]), 
-                          data=xyzrgb.tobytes())
-
-        return msg
 
     def sensors_callback(self, img_msg, depth_msg):
         """
@@ -448,7 +429,7 @@ class VLMapBuilderROS(Node):
         mask = (self.grid_pos > 0).all(axis=1)
         color = self.grid_rgb[mask]
         points = self.grid_pos[mask] * self.cs  #scale it to meters
-        msg = self.xyzrgb_array_to_pointcloud2(points, color)
+        msg = xyzrgb_array_to_pointcloud2(self.get_clock().now().to_msg(), points, color)
         self.publish_static_transform()
         self.get_logger().info(f"Time for creating pointcloud2 msg: {time.time() - time_save}")
         self.pointcloud_pub.publish(msg)

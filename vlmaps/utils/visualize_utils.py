@@ -5,6 +5,10 @@ from tqdm import tqdm
 from scipy.ndimage import distance_transform_edt
 from multiprocessing import Process
 
+from std_msgs.msg import Header
+from sensor_msgs.msg import PointCloud2, PointField
+
+
 class Visualizer(Process):
 
     def __init__(self, pcd: o3d.geometry.PointCloud, name: str):
@@ -164,3 +168,31 @@ def visualize_masked_map_2d(rgb: np.ndarray, mask: np.ndarray):
         mask (np.ndarray): (gs, gs) element range [0, 1] np.uint8
     """
     visualize_heatmap_2d(rgb, mask.astype(np.float32))
+
+def xyzrgb_array_to_pointcloud2(timestamp, points, colors, stamp=None, frame_id=None, seq=None):
+        '''
+        Create a sensor_msgs.PointCloud2 from an array
+        of points and a synched array of color values.
+        '''
+
+        header = Header()
+        header.frame_id = "vlmap"
+        header.stamp = timestamp
+
+        ros_dtype = PointField.FLOAT32
+        dtype = np.float32
+        itemsize = np.dtype(dtype).itemsize
+        fields = [PointField(name=n, offset=i*itemsize, datatype=ros_dtype, count=1) for i, n in enumerate('xyzrgb')]
+        nbytes = 6
+        xyzrgb = np.array(np.hstack([points, colors/255]), dtype=np.float32)
+        msg = PointCloud2(header=header, 
+                          height = 1, 
+                          width= points.shape[0], 
+                          fields=fields, 
+                          is_dense= False, 
+                          is_bigedian=False, 
+                          point_step=(itemsize * nbytes), 
+                          row_step = (itemsize * nbytes * points.shape[0]), 
+                          data=xyzrgb.tobytes())
+
+        return msg
