@@ -34,7 +34,7 @@ from tf2_ros import TransformException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 import message_filters
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import PointCloud2, PointField, CameraInfo
 from std_msgs.msg import Header
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 from geometry_msgs.msg import TransformStamped
@@ -138,13 +138,24 @@ class VLMapBuilderROS(Node):
         ### Iteration counter of the mapping callback
         self.frame_i = 0
         # load camera calib matrix in config
-        self.calib_mat = np.array(self.map_config.cam_calib_mat).reshape((3, 3))
+        self.use_camera_info_topic = self.map_config.use_camera_info_topic
+        if self.use_camera_info_topic == True:
+            self.camera_info_sub = self.create_subscription(
+                CameraInfo,
+                self.map_config.camera_info_topic,
+                self.camera_info_callback,
+                10
+            )
+            self.camera_info_available = False
+        else:
+            self.calib_mat = np.array(self.map_config.cam_calib_mat).reshape((3, 3))
+            self.camera_info_available = True
 
         ### Make more explicit the calib intrinsics:
-        self.focal_lenght_x = self.calib_mat[0,0]       #fx
-        self.focal_lenght_y = self.calib_mat[1,1]       #fy
-        self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
-        self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
+        #self.focal_lenght_x = self.calib_mat[0,0]       #fx
+        #self.focal_lenght_y = self.calib_mat[1,1]       #fy
+        #self.principal_point_x = self.calib_mat[0,2]    #cx or ppx
+        #self.principal_point_y = self.calib_mat[1,2]    #cy or ppy
 
         self.target_frame = self.map_config.target_frame     #"map"
         self.amcl_cov_threshold = self.map_config.amcl_cov_threshold
@@ -175,6 +186,7 @@ class VLMapBuilderROS(Node):
         self.R_XY = np.array([[0, 1, 0],
                              [0, 0, -1],
                              [-1, 0, 0]])
+        
         
     
     def enable_mapping_callback(self, request, response):
@@ -241,6 +253,9 @@ class VLMapBuilderROS(Node):
         """
         if not self.enable_mapping:
             print("Mapping not enabled: skipping callback")
+            return
+        if not self.camera_info_available:
+            print("Waiting for camera info topic to be avialable: \nIf you don't want this feature, disable it in the config file")
             return
 
         loop_timer = time.time()
@@ -500,6 +515,11 @@ class VLMapBuilderROS(Node):
     # Simply store the covariance values, will be analyze
     def amcl_callback(self, msg):
         self.amcl_cov = msg.pose.covariance
+
+    def camera_info_callback(self, msg):
+        if not self.camera_info_available:
+            self.calib_mat = np.array(msg.k, dtype=np.float32).reshape((3, 3))
+            self.camera_info_available = True
 
     def _init_map(self, maximum_height: float, cs: float, gs: int, map_path: Path) -> Tuple:
         """

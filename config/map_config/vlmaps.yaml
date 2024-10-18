@@ -1,6 +1,8 @@
 #map_type: "vlmap" # "vlmap", "gt", "clip", "clip_gradcam", "vlmaps_lseg_3d"
 maximum_height: 2.5
 cam_calib_mat: [386.0, 0.0, 321.0, 0.0, 386.0, 238.0, 0.0, 0.0, 1.0]
+use_camera_info_topic: True
+camera_info_topic: "/cer/realsense_repeater/camera_info"
 grid_size: 1000
 cell_size: 0.05
 map_save_dir: "/home/ergocub"
