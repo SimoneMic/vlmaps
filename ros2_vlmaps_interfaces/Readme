@@ -1,0 +1,5 @@
+Remember to compile /ros2_vlmaps_interfaces folder with "colcon build" and to source the bash file in /ros2_vlmaps_interfaces/install/local_setup.bash
+
+Example of service call for live indexing:
+
+ros2 service call /index_map ros2_vlmaps_interfaces/srv/IndexMap "{indexing_string: chair}"

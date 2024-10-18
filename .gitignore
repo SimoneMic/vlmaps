@@ -21,3 +21,4 @@ ros2_vlmaps_interfaces/install
 ros2_vlmaps_interfaces/log
 application/outputs
 outputs
+.vscode/
