@@ -1,20 +1,17 @@
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Set
+from typing import Tuple, Set
 
-from tqdm import tqdm
-import cv2
 import torchvision.transforms as transforms
 import numpy as np
 from omegaconf import DictConfig
 import torch
 import gdown
+import copy
 import open3d as o3d
 from cv_bridge import CvBridge
 import time
-from geometry_msgs.msg import PoseWithCovarianceStamped
 
-import rclpy.time
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
     load_3d_map,
@@ -25,52 +22,20 @@ from vlmaps.utils.mapping_utils import (
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
 import vlmaps.utils.traverse_pixels as raycast
 from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_torch)
-from vlmaps.utils.visualize_utils import visualize_rgb_map_3d
+#from vlmaps.utils.visualize_utils import visualize_rgb_map_3d
+from vlmaps.utils.conversion_utils import quaternion_matrix, xyzrgb_array_to_pointcloud2
 
 #ROS2 stuff
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformException
 from rclpy.node import Node
-from sensor_msgs.msg import Image
 import message_filters
-from sensor_msgs.msg import PointCloud2, PointField, CameraInfo
-from std_msgs.msg import Header
+from sensor_msgs.msg import PointCloud2, CameraInfo, Image
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
-from geometry_msgs.msg import TransformStamped
-
-import math
-import copy
-import torch
-
+from geometry_msgs.msg import TransformStamped, PoseWithCovarianceStamped
 from ros2_vlmaps_interfaces.srv import EnableMapping
-import rclpy
-
-
-def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
-    """Return homogeneous rotation matrix from quaternion.
-
-    >>> R = quaternion_matrix([0.06146124, 0, 0, 0.99810947])
-    >>> numpy.allclose(R, rotation_matrix(0.123, (1, 0, 0)))
-    True
-
-    """
-    # epsilon for testing whether a number is close to zero
-    _EPS = np.finfo(float).eps * 4.0
-
-    q = np.array(quaternion[:4], dtype=np.float64, copy=True)
-    nq = np.dot(q, q)
-    if nq < _EPS:
-        return np.identity(4)
-    q *= math.sqrt(2.0 / nq)
-    q = np.outer(q, q)
-    return np.array((
-        (1.0-q[1, 1]-q[2, 2],     q[0, 1]-q[2, 3],     q[0, 2]+q[1, 3], 0.0),
-        (    q[0, 1]+q[2, 3], 1.0-q[0, 0]-q[2, 2],     q[1, 2]-q[0, 3], 0.0),
-        (    q[0, 2]-q[1, 3],     q[1, 2]+q[0, 3], 1.0-q[0, 0]-q[1, 1], 0.0),
-        (                0.0,                 0.0,                 0.0, 1.0)
-        ), dtype=np.float64)
-
+import rclpy.time
 
 
 #### ROS2 wrapper
@@ -186,8 +151,6 @@ class VLMapBuilderROS(Node):
         self.R_XY = np.array([[0, 1, 0],
                              [0, 0, -1],
                              [-1, 0, 0]])
-        
-        
     
     def enable_mapping_callback(self, request, response):
         try:
@@ -217,35 +180,6 @@ class VLMapBuilderROS(Node):
         self.tf_static_broadcaster.sendTransform(tf)
         self.static_tf_published = True
 
-
-    def xyzrgb_array_to_pointcloud2(self, points, colors, stamp=None, frame_id=None, seq=None):
-        '''
-        Create a sensor_msgs.PointCloud2 from an array
-        of points and a synched array of color values.
-        '''
-
-        header = Header()
-        header.frame_id = self.vlmap_frame_name
-        header.stamp = self.get_clock().now().to_msg()
-
-        ros_dtype = PointField.FLOAT32
-        dtype = np.float32
-        itemsize = np.dtype(dtype).itemsize
-        fields = [PointField(name=n, offset=i*itemsize, datatype=ros_dtype, count=1) for i, n in enumerate('xyzrgb')]
-        nbytes = 6
-        xyzrgb = np.array(np.hstack([points, colors/255]), dtype=np.float32)
-        #xyzrgb = np.array(points_ren, dtype=np.float32)
-        msg = PointCloud2(header=header, 
-                          height = 1, 
-                          width= points.shape[0], 
-                          fields=fields, 
-                          is_dense= False, 
-                          is_bigedian=False, 
-                          point_step=(itemsize * nbytes), 
-                          row_step = (itemsize * nbytes * points.shape[0]), 
-                          data=xyzrgb.tobytes())
-
-        return msg
 
     def sensors_callback(self, img_msg, depth_msg):
         """
@@ -407,7 +341,7 @@ class VLMapBuilderROS(Node):
         mask = (self.grid_pos > 0).all(axis=1)
         color = self.grid_rgb[mask]
         points = self.grid_pos[mask] * self.cs  #scale it to meters
-        msg = self.xyzrgb_array_to_pointcloud2(points, color)
+        msg = xyzrgb_array_to_pointcloud2(points, color, stamp=self.get_clock().now().to_msg(), frame_id=self.vlmap_frame_name)
         msg.header.stamp = depth_msg.header.stamp
         self.publish_static_transform(depth_msg.header.stamp)
         self.get_logger().info(f"Time for creating pointcloud2 msg: {time.time() - time_save}")
