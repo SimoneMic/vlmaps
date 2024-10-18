@@ -113,8 +113,12 @@ def get_lseg_feat(
             plt.axis("off")
 
             plt.tight_layout()
-            plt.show()
-            cv2.waitKey()
+            #plt.show()
+            #cv2.waitKey()
+            fig.canvas.draw()
+            img_plot = np.array(fig.canvas.renderer.buffer_rgba())
+
+            return outputs, pred, img_plot
             
         return outputs, pred
 

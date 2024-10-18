@@ -25,6 +25,10 @@ from vlmaps.utils.camera_utils import (FeaturedPC, project_depth_features_pc_tor
 #from vlmaps.utils.visualize_utils import visualize_rgb_map_3d
 from vlmaps.utils.conversion_utils import quaternion_matrix, xyzrgb_array_to_pointcloud2
 
+#Clip
+from vlmaps.utils.clip_utils import get_lseg_score
+import clip
+
 #ROS2 stuff
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -32,9 +36,10 @@ from tf2_ros import TransformException
 from rclpy.node import Node
 import message_filters
 from sensor_msgs.msg import PointCloud2, CameraInfo, Image
+from std_msgs.msg import String 
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 from geometry_msgs.msg import TransformStamped, PoseWithCovarianceStamped
-from ros2_vlmaps_interfaces.srv import EnableMapping
+from ros2_vlmaps_interfaces.srv import EnableMapping, IndexMap
 import rclpy.time
 
 
@@ -140,6 +145,15 @@ class VLMapBuilderROS(Node):
         ### Enable Mapping Service
         self.enable_mapping_srv = self.create_service(EnableMapping, 'vlmap_builder/enable_mapping', self.enable_mapping_callback)
         self.enable_mapping = True  # TODO add to config file
+        self.seg_vis = self.map_config.seg_vis
+        if self.seg_vis:
+            self.seg_img_pub = self.create_publisher(Image, "seg_image", 1)
+
+        if self.map_config.live_indexing:
+            self.index_map_srv = self.create_service(IndexMap, 'index_map', self.index_map_callback) 
+            self._init_clip()
+            self.index_pub = self.create_publisher(PointCloud2, "vlmap_index_result", 10)
+
         ### Robot configuration
         self.robot_name = os.getenv('YARP_ROBOT_NAME')
         if ("ergoCub" in self.robot_name) or ("ergocub" in self.robot_name):
@@ -246,9 +260,37 @@ class VLMapBuilderROS(Node):
         #### Segment image and extract features
         # get pixel-aligned LSeg features
         start = time.time()
-        pix_feats, category_preds = get_lseg_feat(
-            self.lseg_model, rgb, self.map_config["labels"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, get_preds=self.get_preds
-        )
+        #pix_feats, category_preds = get_lseg_feat(
+        #    self.lseg_model, rgb, self.map_config["labels"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std, get_preds=self.get_preds
+        #)
+        if self.seg_vis:
+            pix_feats, category_preds, seg_img = get_lseg_feat(
+                self.lseg_model,
+                rgb, self.map_config["labels"],
+                self.lseg_transform,
+                self.device,
+                self.crop_size,
+                self.base_size,
+                self.norm_mean,
+                self.norm_std,
+                get_preds=self.get_preds,
+                vis=self.seg_vis
+                )
+            img_msg = self.cv_bridge.cv2_to_imgmsg(np.array(seg_img))
+            self.seg_img_pub.publish(img_msg)
+        else:
+            pix_feats, category_preds = get_lseg_feat(
+                self.lseg_model, 
+                rgb, self.map_config["labels"],
+                self.lseg_transform,
+                self.device,
+                self.crop_size,
+                self.base_size,
+                self.norm_mean,
+                self.norm_std,
+                get_preds=self.get_preds,
+                vis=self.seg_vis
+            )
         time_diff = time.time() - start
         self.get_logger().info(f"lseg features extracted in: {time_diff}")
 
@@ -454,6 +496,65 @@ class VLMapBuilderROS(Node):
         if not self.camera_info_available:
             self.calib_mat = np.array(msg.k, dtype=np.float32).reshape((3, 3))
             self.camera_info_available = True
+
+    def index_map_callback(self, request, response):
+        try:
+            seg_mask = self.index_map(request.indexing_string)
+            mask_rgb = self.grid_rgb.copy()
+            mask_rgb[:] = [0, 0, 255]
+            mask_rgb[seg_mask] = [255, 0, 0]
+            mask = (self.grid_pos > 0).all(axis=1)
+            color = mask_rgb[mask]
+            points = self.grid_pos[mask] * 0.05  #scale it to meters
+            msg = xyzrgb_array_to_pointcloud2(points, color, stamp=self.get_clock().now().to_msg(), frame_id=self.vlmap_frame_name)
+            self.index_pub.publish(msg)
+        except Exception as ex:
+            print(f"Unexpected exception: {ex=}, {type(ex)=}")
+            response.is_ok = False
+            response.error_msg = f"[index_map_callback] An exception occurred: {ex}"
+            return response
+        response.is_ok = True
+        return response
+    
+    def index_map(self, language_desc: str):
+        scores_mat = get_lseg_score(
+            self.clip_model,
+            [language_desc],
+            self.grid_feat,
+            self.clip_feat_dim,
+            use_multiple_templates=True,
+            add_other=True,
+        )  # score for name and other
+        cat_id = 0
+
+        max_ids = np.argmax(scores_mat, axis=1)
+        mask = max_ids == cat_id
+        return mask
+
+    def _init_clip(self, clip_version="ViT-B/32"):
+        if hasattr(self, "clip_model"):
+            print("clip model is already initialized")
+            return
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
+        self.clip_version = clip_version
+        self.clip_feat_dim = {
+            "RN50": 1024,
+            "RN101": 512,
+            "RN50x4": 640,
+            "RN50x16": 768,
+            "RN50x64": 1024,
+            "ViT-B/32": 512,
+            "ViT-B/16": 512,
+            "ViT-L/14": 768,
+        }[self.clip_version]
+        print("Loading CLIP model...")
+        self.clip_model, self.preprocess = clip.load(self.clip_version)  # clip.available_models()
+        self.clip_model.to(self.device).eval()
 
     def _init_map(self, maximum_height: float, cs: float, gs: int, map_path: Path) -> Tuple:
         """

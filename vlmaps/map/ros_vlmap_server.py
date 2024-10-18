@@ -2,9 +2,11 @@ import sys
 import rclpy
 from rclpy.node import Node
 from pathlib import Path
-from ros2_vlmaps_interfaces.srv import IndexMap, LoadMap
+from ros2_vlmaps_interfaces.srv import IndexMap, LoadMap, ShowMap
 from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
+from sensor_msgs.msg import PointCloud2, PointField
+from std_msgs.msg import Header, ColorRGBA
 from visualization_msgs.msg import Marker
 
 import numpy as np
@@ -18,10 +20,9 @@ from vlmaps.utils.matterport3d_categories import mp3dcat
 from vlmaps.utils.visualize_utils import (
     pool_3d_label_to_2d,
     pool_3d_rgb_to_2d,
-    visualize_heatmap_3d,
     visualize_masked_map_3d,
-    get_heatmap_from_mask_3d,
 )
+from vlmaps.utils.conversion_utils import xyzrgb_array_to_pointcloud2
 
 
 class VLMapPublisher(Node):
@@ -39,10 +40,13 @@ class VLMapPublisher(Node):
         self.config = config
         # Publishers Init
         self.map_pub = self.create_publisher(
-            Marker, "/vlmap_marker", 10
+            Marker, "/vlmap_2d_index_marker", 10
         )
+        self.pointcloud_pub = self.create_publisher(PointCloud2, "vlmap", 10)
+        self.index_pointcloud_pub = self.create_publisher(PointCloud2, "vlmap_index_result", 10)
         # Service init
         self.index_map_srv = self.create_service(IndexMap, 'index_map', self.index_map_callback) 
+        self.show_rgb_map_srv = self.create_service(ShowMap, 'show_vlmap', self.show_rgb_map_callback) 
         self.load_map_srv = self.create_service(LoadMap, 'load_map', self.load_map_callback) 
 
         ### VLMaps stuff:
@@ -77,11 +81,16 @@ class VLMapPublisher(Node):
                 #visualize_heatmap_2d(rgb_2d, heatmap)
                 #self.publish_markers(mask_2d, rgb_2d)
             else:
-                visualize_masked_map_3d(self.vlmap.grid_pos, mask, self.vlmap.grid_rgb)
-                #heatmap = get_heatmap_from_mask_3d(
-                #    self.vlmap.grid_pos, mask, cell_size=self.config.params.cs, decay_rate=self.config.decay_rate
-                #)
-                #visualize_heatmap_3d(self.vlmap.grid_pos, heatmap, self.vlmap.grid_rgb)
+                #visualize_masked_map_3d(self.vlmap.grid_pos, mask, self.vlmap.grid_rgb)
+                grid_rgb = self.vlmap.grid_rgb.copy()
+                grid_rgb[:] = [0, 0, 255]
+                grid_rgb[mask] = [255, 0, 0]
+                pos_mask = (self.vlmap.grid_pos > 0).all(axis=1)
+                color = grid_rgb[pos_mask]
+                points = self.vlmap.grid_pos[pos_mask] * 0.05  #scale it to meters
+                msg = xyzrgb_array_to_pointcloud2(points, color, stamp=self.get_clock().now().to_msg(), frame_id="vlmap")
+                self.get_logger().info(f"{type(msg)}")
+                self.index_pointcloud_pub.publish(msg)
         except Exception as ex:
             print(f"Unexpected exception: {ex=}, {type(ex)=}")
             response.is_ok = False
@@ -89,7 +98,21 @@ class VLMapPublisher(Node):
             return response
         response.is_ok = True
         return response
-        ### TODO use ROS2 publishing with publish_markers for 2D
+
+    def show_rgb_map_callback(self, request, response):
+        try:
+            pos_mask = (self.vlmap.grid_pos > 0).all(axis=1)
+            color = self.vlmap.grid_rgb[pos_mask]
+            points = self.vlmap.grid_pos[pos_mask] * 0.05 
+            msg = xyzrgb_array_to_pointcloud2(self.get_clock().now().to_msg(), points, color)
+            self.pointcloud_pub.publish(msg)
+        except Exception as ex:
+            print(f"Unexpected exception: {ex=}, {type(ex)=}")
+            response.is_ok = False
+            response.error_msg = "[show_rgb_map_callback] An exception occurred:"
+            return response
+        response.is_ok = True
+        return response
 
     def publish_markers(self, mask_2d, rgb_2d):
         try:

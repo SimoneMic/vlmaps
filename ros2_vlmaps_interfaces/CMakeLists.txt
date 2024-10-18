@@ -18,6 +18,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
                             "srv/LoadMap.srv"
                             "srv/IndexMap.srv"
                             "srv/EnableMapping.srv"
+                            "srv/ShowMap.srv"
                             LIBRARY_NAME ${PROJECT_NAME}
 )
 
