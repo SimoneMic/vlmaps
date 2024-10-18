@@ -10,7 +10,7 @@ from omegaconf import DictConfig
 from scipy.ndimage import binary_closing, binary_dilation, gaussian_filter
 import torch
 
-from vlmaps.utils.clip_utils import get_text_feats_multiple_templates
+#from vlmaps.utils.clip_utils import get_text_feats_multiple_templates
 from vlmaps.utils.visualize_utils import pool_3d_label_to_2d
 
 from vlmaps.map.vlmap_builder import VLMapBuilderROS
@@ -26,37 +26,13 @@ class VLMap(Map):
         self.scores_mat = None
         self.categories = None
 
-        # TODO: check if needed
-        # map_path = os.path.join(map_dir, "grid_lseg_1.npy")
-        # self.map = load_map(map_path)
-        # self.map_cropped = self.map[self.xmin : self.xmax + 1, self.ymin : self.ymax + 1]
-        # self._init_clip()
-        # self._customize_obstacle_map(
-        #     map_config["potential_obstacle_names"],
-        #     map_config["obstacle_names"],
-        #     vis=False,
-        # )
-        # self.obstacles_new_cropped = Map._dilate_map(
-        #     self.obstacles_new_cropped == 0,
-        #     map_config["dilate_iter"],
-        #     map_config["gaussian_sigma"],
-        # )
-        # self.obstacles_new_cropped = self.obstacles_new_cropped == 0
-        # self.load_categories()
-        # print("a VLMap is created")
-        # pass
     
     def create_map_ros(self) -> None:
-        #print(f"Creating map from ROS, from config at: ", data_dir)
-        #self._setup_paths(data_dir)
-
         rclpy.init()
         print("Creating VLMapBuilderROS")
         self.map_builder = VLMapBuilderROS(
             self.map_config
         )
-        #if self.map_config.pose_info.pose_type == "mobile_base":
-        #    self.map_builder.create_mobile_base_map()
 
         print("Spinning Node")
         rclpy.spin(self.map_builder)

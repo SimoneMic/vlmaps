@@ -14,6 +14,7 @@ from cv_bridge import CvBridge
 import time
 from geometry_msgs.msg import PoseWithCovarianceStamped
 
+import rclpy.time
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
     load_3d_map,
@@ -43,7 +44,7 @@ import copy
 import torch
 
 from ros2_vlmaps_interfaces.srv import EnableMapping
-
+import rclpy
 
 
 def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
@@ -163,6 +164,18 @@ class VLMapBuilderROS(Node):
         ### Enable Mapping Service
         self.enable_mapping_srv = self.create_service(EnableMapping, 'vlmap_builder/enable_mapping', self.enable_mapping_callback)
         self.enable_mapping = True  # TODO add to config file
+        ### Robot configuration
+        self.robot_name = os.getenv('YARP_ROBOT_NAME')
+        if ("ergoCub" in self.robot_name) or ("ergocub" in self.robot_name):
+            self.robot_name = "ergocub"
+        if ("R1" in self.robot_name):
+            self.robot_name = "R1"
+        # Rotation of 90 around X followed by a rotation of 90 around Y
+        # Rotation from realsense frame to depth frame
+        self.R_XY = np.array([[0, 1, 0],
+                             [0, 0, -1],
+                             [-1, 0, 0]])
+        
     
     def enable_mapping_callback(self, request, response):
         try:
@@ -233,14 +246,32 @@ class VLMapBuilderROS(Node):
         loop_timer = time.time()
         #### first do a TF check between the camera and map frame
         try:
-            transform = self.tf_buffer.lookup_transform(
+            if self.robot_name == "ergocub":
+                # for debug: the rotation component should be equal to R_XY - TODO remove
+                video_to_head_tf = self.tf_buffer.lookup_transform(
+                    "realsense_depth_frame"
+                    "realsense",
+                    rclpy.time.Time(0)
+                    )
+                transform = self.tf_buffer.lookup_transform(
+                    self.target_frame,
+                    "compensated_realsense_frame",
+                    depth_msg.header.stamp
+                    )
+            else:
+                transform = self.tf_buffer.lookup_transform(
                     self.target_frame,
                     depth_msg.header.frame_id,
                     depth_msg.header.stamp
                     )
+
         except TransformException as ex:
-                self.get_logger().info(
-                        f'Could not transform {depth_msg.header.frame_id} to {self.target_frame}: {ex}')
+                if self.robot_name == "R1":
+                    self.get_logger().info(
+                            f'Could not transform {depth_msg.header.frame_id} to {self.target_frame}: {ex}')
+                else:
+                    self.get_logger().info(
+                            f'Could not transform compensated_realsense_frame to {self.target_frame}: {ex}')
                 return
         # Check covariance: TODO is it enough to check only two values?
         if not (abs(self.amcl_cov.max()) < self.amcl_cov_threshold) and (abs(self.amcl_cov.min()) < self.amcl_cov_threshold):
@@ -254,6 +285,9 @@ class VLMapBuilderROS(Node):
         ## Let's get an SE(4) matrix form
         transform_np = quaternion_matrix(transform_quat_np)
         transform_np[0:3, -1] = transform_pose_np
+        # Do this only for ergoCub: TODO could change with a different compensation flag
+        if self.robot_name == "ergocub":
+            transform_np[0:3, -1] = self.R_XY @ transform_np[0:3, -1]   # Rotate the compensated frame in the video standard representation (Z forward)
         ## Convert the rgb format from ros2 to OpenCv
         rgb = self.cv_bridge.imgmsg_to_cv2(img_msg) # TODO check image color encoding
         ## Convert depth from ros2 to OpenCv
@@ -278,7 +312,7 @@ class VLMapBuilderROS(Node):
         featured_pc.embeddings = copy.deepcopy(features_per_point)
         featured_pc.rgb = copy.deepcopy(color_per_point)
         if category_preds is not None and self.get_preds:
-            featured_pc.category_preds = copy.deepcopy(category_preds)  #TODO check if necessary
+            featured_pc.category_preds = copy.deepcopy(category_preds)
         else:
             featured_pc.category_preds = np.full_like(featured_pc.rgb, -1)
         self.get_logger().info(f"Time for executing project_depth_features_pc: {time.time() - start}")
@@ -293,16 +327,11 @@ class VLMapBuilderROS(Node):
         self.get_logger().info(f"Time for transforming PC in map frame: {time_diff}")
         #o3d.visualization.draw_geometries_with_vertex_selection([pcd_global])
 
-
         #### Raycast
         if ((self.frame_i != 0) or (self.loaded_map == True)) and self.use_raycast:
-
-            #map_to_cam_tf = np.linalg.inv(transform_np)
-            #cam_pose = map_to_cam_tf[0:3,-1]
             cam_pose = [transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z]
             voxels_to_clear = self.raycasting(cam_pose, featured_pc.points_xyz)
             self.remove_map_voxels(voxels_to_clear)
-
 
         #### Map update - TODO: separate it in another thread
         start = time.time()
@@ -358,7 +387,7 @@ class VLMapBuilderROS(Node):
         self.get_logger().info(f"iter {self.frame_i}")
         self.frame_i += 1   # increase counter for map saving purposes
 
-        #remove points that are 0.0
+        #remove points that are 0.0 : TODO do it in a separate thread
         time_save = time.time()
         mask = (self.grid_pos > 0).all(axis=1)
         color = self.grid_rgb[mask]
