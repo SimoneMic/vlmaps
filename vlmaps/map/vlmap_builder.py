@@ -1,28 +1,22 @@
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Set
+from typing import Tuple, Set
 
-from tqdm import tqdm
-import cv2
 import torchvision.transforms as transforms
 import numpy as np
 from omegaconf import DictConfig
 import torch
 import gdown
-#import open3d as o3d
-from cv_bridge import CvBridge
+from rclpy.executors import MultiThreadedExecutor
 
 from vlmaps.utils.lseg_utils import get_lseg_feat
 from vlmaps.utils.mapping_utils import (
     load_3d_map,
     save_3d_map,
-    cvt_pose_vec2tf,
-    load_depth_npy,
     depth2pc,
     transform_pc,
     base_pos2grid_id_3d,
     project_point,
-    get_sim_cam_mat,
 )
 from vlmaps.lseg.modules.models.lseg_net import LSegEncNet
 
@@ -31,17 +25,10 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformException
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 import message_filters
-#import sensor_msgs_py
 import rclpy
 import math
-#from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud
-
-#def visualize_pc(pc: np.ndarray):
-#    pcd = o3d.geometry.PointCloud()
-#    pcd.points = o3d.utility.Vector3dVector(pc)
-#    o3d.visualization.draw_geometries([pcd])
 
 def quaternion_matrix(quaternion):  #Copied from https://github.com/ros/geometry/blob/noetic-devel/tf/src/tf/transformations.py#L1515
     """Return homogeneous rotation matrix from quaternion.
@@ -81,12 +68,16 @@ class VLMapBuilderROS(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         # subscribers init with callback
-        img_topic = "/cer/realsense_repeater/color_image"   # TODO initialize from config file
-        depth_topic = "/cer/realsense_repeater/depth_image"
+        img_topic = "/camera/rgbd/img"
+        depth_topic = "/camera/rgbd/depth"
+        camera_info_topic = "/camera/rgbd/camera_info"
+        self.robot_name = "ergocub"
+        self.camera_info_available = False
         self.img_sub = message_filters.Subscriber(self, Image, img_topic)
         self.depth_sub = message_filters.Subscriber(self, Image, depth_topic)
         self.tss = message_filters.ApproximateTimeSynchronizer([self.img_sub, self.depth_sub], 1, slop=0.3)        
         self.tss.registerCallback(self.sensors_callback)
+        self.camera_info_sub = self.create_subscription(CameraInfo, camera_info_topic, self.camera_info_callback, 10)
         ## First part of create_mobile_base_map for init stuff
         # access config info
         camera_height = self.map_config.pose_info.camera_height
@@ -113,8 +104,6 @@ class VLMapBuilderROS(Node):
             self.max_id,
         ) = self._init_map(camera_height, self.cs, self.gs, self.map_save_path)
 
-        self.cv_bridge = CvBridge()
-
         #### Iteration counter
         self.frame_i = 0
         # load camera calib matrix in config
@@ -123,50 +112,52 @@ class VLMapBuilderROS(Node):
         self.height_map = -100 * np.ones((self.gs, self.gs), dtype=np.float32)
 
         #pbar = tqdm(zip(self.rgb_paths, self.depth_paths, self.base_poses), total=len(self.rgb_paths))
+    
+    def camera_info_callback(self, msg):
+        """
+        Saves the calib matrix of the camera intrinsic parameters
+        """
+        if not self.camera_info_available:
+            self.calib_mat = np.array(msg.k, dtype=np.float32).reshape((3, 3))
+            self.camera_info_available = True
 
     def sensors_callback(self, img_msg, depth_msg):
         """
         build the 3D map centering at the first base frame
         """
         self.get_logger().info('sensors_callback')
-        #### Convert the rgb format from ros to OpenCv
-        rgb = self.cv_bridge.imgmsg_to_cv2(img_msg) # TODO check image color encoding
-        #### Convert depth from ros2 to OpenCv
-        depth = self.cv_bridge.imgmsg_to_cv2(depth_msg, "passthrough")  # TODO check image color encoding
-        depth = depth.astype(np.float16)
-        #### TODO should I normalize the depth?
-        self.get_logger().info('Ros2 to CV2 conversion')
-
-        # get pixel-aligned LSeg features
-        pix_feats = get_lseg_feat(
-            self.lseg_model, rgb, ["example"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std
-        )
-        self.get_logger().info('lseg features extracted')
-        #pix_feats_intr = get_sim_cam_mat(pix_feats.shape[2], pix_feats.shape[3])
-        #### It's the same as the camera one, we are not in simulation anymore
-        pix_feats_intr = self.calib_mat 
-        # backproject depth point cloud
-        pc = self._backproject_depth(depth, self.calib_mat, self.depth_sample_rate, min_depth=0.2, max_depth=6) 
-        self.get_logger().info('backprojected depth')
-        # transform the point cloud to global frame (init base frame)
-        #pc_transform = tf @ self.base_transform @ self.base2cam_tf
-        #pc_global = transform_pc(pc, pc_transform)  # (3, N)
-
+        if not self.camera_info_available:
+            self.get_logger().warn('camera_info not yet received, waiting...')
         #### Transform PC to map frame - i.e. global frame
         target_frame="map"
-        source_frame="head_link"
+        source_frame = depth_msg.header.frame_id
+        if self.robot_name == "ergocub":
+            source_frame="realsense_compensated"
         try:
             transform = self.tf_buffer.lookup_transform(
                     target_frame,
                     source_frame,
-                    rclpy.time.Time()
-                    )  #rclpy.time.Time() rclpy.duration.Duration(seconds=0.1)
-            #img_msg.header.stamp
+                    depth_msg.header.stamp
+                    )
         except TransformException as ex:
                 self.get_logger().info(
                         f'Could not transform {source_frame} to {target_frame}: {ex}')
                 return
         self.get_logger().info('Transform available')
+
+        #### Convert the image format from ros to numpy
+        rgb = np.frombuffer(img_msg.data, dtype=np.uint8).reshape(img_msg.height, img_msg.width, 3)
+        depth = np.frombuffer(depth_msg.data, dtype=np.float32).reshape(depth_msg.height, depth_msg.width)
+
+        # get pixel-aligned LSeg features
+        pix_feats = get_lseg_feat(
+            self.lseg_model, rgb, ["example"], self.lseg_transform, self.device, self.crop_size, self.base_size, self.norm_mean, self.norm_std
+        )
+        #### It's the same as the camera one, we are not in simulation anymore
+        pix_feats_intr = self.calib_mat 
+        # backproject depth point cloud
+        pc = self._backproject_depth(depth, self.calib_mat, self.depth_sample_rate, min_depth=0.2, max_depth=6) 
+
         #### Convert tf2 transform to np array components
         transform_pose_np = np.array([transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z])
         transform_quat_np = np.array([transform.transform.rotation.x, transform.transform.rotation.y,
@@ -182,7 +173,7 @@ class VLMapBuilderROS(Node):
             #self.get_logger().info(f'loop number {i}')
             row, col, height = base_pos2grid_id_3d(self.gs, self.cs, p[0], p[1], p[2])
             if self._out_of_range(row, col, height, self.gs, self.vh):
-                self.get_logger().info(f"out of range with p0 {p[0]} p1 {p[1]} p2 {p[2]}")
+                #self.get_logger().info(f"out of range with p0 {p[0]} p1 {p[1]} p2 {p[2]}")
                 continue
             
             px, py, pz = project_point(self.calib_mat, p_local)
@@ -232,8 +223,6 @@ class VLMapBuilderROS(Node):
             self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
         self.frame_i += 1   # increase counter
         self.get_logger().info(f"iter {self.frame_i}")
-        # TODO put it in a callback
-        #self._save_3d_map(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb, self.occupied_ids, self.mapped_iter_set, self.max_id)
 
     def _init_map(self, camera_height: float, cs: float, gs: int, map_path: Path) -> Tuple:
         """
@@ -371,3 +360,14 @@ class VLMapBuilderROS(Node):
         weight = weight[:max_id]
         grid_rgb = grid_rgb[:max_id]
         save_3d_map(self.map_save_path, grid_feat, grid_pos, weight, occupied_ids, list(mapped_iter_set), grid_rgb)
+
+
+def main():
+    rclpy.init()
+    print("Creating VLMapBuilderROS")
+    node = VLMapBuilderROS()
+    exe = MultiThreadedExecutor()
+    exe.add_node(node)
+    exe.add_node(node.map_wrapper)
+    print("Spinning Node VLMapBuilderROS")
+    exe.spin()
