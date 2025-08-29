@@ -26,7 +26,7 @@ def main(config: DictConfig) -> None:
     #data_dirs = sorted([x for x in data_dir.iterdir() if x.is_dir()])
     vlmap = VLMap(config.map_config, data_dir="/home/user1/vlmaps/vlmaps.h5df")
     vlmap.load_map("/home/user1/vlmaps/vlmaps.h5df")
-    visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb)
+    visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb, 1.0)
     print("Type: 'quit' to exit ")
     cat = input("What is your interested category in this scene?")
     # cat = "chair"

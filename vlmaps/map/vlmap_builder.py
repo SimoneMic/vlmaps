@@ -189,7 +189,7 @@ class VLMapBuilderROS(Node):
             # when the max_id exceeds the reserved size,
             # double the grid_feat, grid_pos, weight, grid_rgb lengths
             if self.max_id >= self.grid_feat.shape[0]:
-                self._reserve_map_space(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb)
+                self.grid_feat, self.grid_pos, self.weight, self.grid_rgb = self._reserve_map_space(self.grid_feat, self.grid_pos, self.weight, self.grid_rgb)
 
             # apply the distance weighting according to
             # ConceptFusion https://arxiv.org/pdf/2302.07241.pdf Sec. 4.1, Feature fusion

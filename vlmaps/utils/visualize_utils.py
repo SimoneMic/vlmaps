@@ -13,6 +13,30 @@ def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray):
     pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
     o3d.visualization.draw_geometries([pcd])
 
+def visualize_rgb_map_3d(pc: np.ndarray, rgb: np.ndarray, voxel_size: float = 1.0):
+    """
+    Visualize a colored voxel grid from a point cloud.
+
+    Parameters
+    ----------
+    pc : (N,3) float array
+        3D points in world units (e.g., meters).
+    rgb : (N,3) uint8/float array
+        RGB colors per point in [0,255].
+    voxel_size : float
+        Voxel edge length in same units as pc (default 0.05 -> 5 cm).
+    """
+    grid_rgb = (rgb.astype(np.float32) / 255.0)
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pc)
+    pcd.colors = o3d.utility.Vector3dVector(grid_rgb)
+
+    # Create colored voxel grid by averaging points/colors within each voxel
+    vox = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)
+
+    # Visualize the voxel grid (legacy viewer; simple + reliable)
+    o3d.visualization.draw_geometries([vox])
 
 def get_heatmap_from_mask_3d(
     pc: np.ndarray, mask: np.ndarray, cell_size: float = 0.05, decay_rate: float = 0.01
