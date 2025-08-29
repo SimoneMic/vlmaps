@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import Tuple, Set
+import hydra
 
 import torchvision.transforms as transforms
 import numpy as np
@@ -85,7 +86,7 @@ class VLMapBuilderROS(Node):
         self.gs = self.map_config.grid_size
         self.depth_sample_rate = self.map_config.depth_sample_rate
 
-        self.map_save_dir = "/home/ergocub"
+        self.map_save_dir = "/home/user1/vlmaps"
         os.makedirs(self.map_save_dir, exist_ok=True)
         self.map_save_path = self.map_save_dir + "/" + "vlmaps.h5df"
 
@@ -128,11 +129,12 @@ class VLMapBuilderROS(Node):
         self.get_logger().info('sensors_callback')
         if not self.camera_info_available:
             self.get_logger().warn('camera_info not yet received, waiting...')
+            return
         #### Transform PC to map frame - i.e. global frame
         target_frame="map"
         source_frame = depth_msg.header.frame_id
         if self.robot_name == "ergocub":
-            source_frame="realsense_compensated"
+            source_frame = "realsense_compensated"
         try:
             transform = self.tf_buffer.lookup_transform(
                     target_frame,
@@ -257,7 +259,7 @@ class VLMapBuilderROS(Node):
 
     def _init_lseg(self):
         crop_size = 480  # 480
-        base_size = 520  # 520
+        base_size = 640  # 520
         if torch.cuda.is_available():
             self.device = "cuda"
         elif torch.backends.mps.is_available():
@@ -278,7 +280,7 @@ class VLMapBuilderROS(Node):
             checkpoint_url = "https://drive.google.com/u/0/uc?id=1ayk6NXURI_vIPlym16f_RG3ffxBWHxvb"
             gdown.download(checkpoint_url, output=str(checkpoint_path))
 
-        pretrained_state_dict = torch.load(checkpoint_path, map_location=self.device)
+        pretrained_state_dict = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         pretrained_state_dict = {k.lstrip("net."): v for k, v in pretrained_state_dict["state_dict"].items()}
         model_state_dict.update(pretrained_state_dict)
         lseg_model.load_state_dict(pretrained_state_dict)
@@ -315,8 +317,7 @@ class VLMapBuilderROS(Node):
         return pc
 
     def _out_of_range(self, row: int, col: int, height: int, gs: int, vh: int) -> bool:
-        #return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0
-        return col >= gs or row >= gs or col < 0 or row < 0 or height < 0
+        return col >= gs or row >= gs or height >= vh or col < 0 or row < 0 or height < 0
 
     def _reserve_map_space(
         self, grid_feat: np.ndarray, grid_pos: np.ndarray, weight: np.ndarray, grid_rgb: np.ndarray
@@ -361,13 +362,19 @@ class VLMapBuilderROS(Node):
         grid_rgb = grid_rgb[:max_id]
         save_3d_map(self.map_save_path, grid_feat, grid_pos, weight, occupied_ids, list(mapped_iter_set), grid_rgb)
 
-
-def main():
+@hydra.main(
+    version_base=None,
+    config_path="../../config",
+    config_name="map_creation_cfg.yaml",
+)
+def main(config : DictConfig):
     rclpy.init()
     print("Creating VLMapBuilderROS")
-    node = VLMapBuilderROS()
+    node = VLMapBuilderROS(config.map_config)
     exe = MultiThreadedExecutor()
     exe.add_node(node)
-    exe.add_node(node.map_wrapper)
     print("Spinning Node VLMapBuilderROS")
     exe.spin()
+
+if __name__=="__main__":
+    main()
