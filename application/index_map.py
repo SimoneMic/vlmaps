@@ -27,30 +27,33 @@ def main(config: DictConfig) -> None:
     vlmap = VLMap(config.map_config, data_dir="/home/user1/vlmaps/vlmaps.h5df")
     vlmap.load_map("/home/user1/vlmaps/vlmaps.h5df")
     visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb)
+    print("Type: 'quit' to exit ")
     cat = input("What is your interested category in this scene?")
     # cat = "chair"
+    while cat !="quit":
+        vlmap._init_clip()
+        print("considering categories: ")
+        print(mp3dcat[1:-1])
+        if config.init_categories:
+            vlmap.init_categories(mp3dcat[1:-1])
+            mask = vlmap.index_map(cat, with_init_cat=True)
+        else:
+            mask = vlmap.index_map(cat, with_init_cat=False)
 
-    vlmap._init_clip()
-    print("considering categories: ")
-    print(mp3dcat[1:-1])
-    if config.init_categories:
-        vlmap.init_categories(mp3dcat[1:-1])
-        mask = vlmap.index_map(cat, with_init_cat=True)
-    else:
-        mask = vlmap.index_map(cat, with_init_cat=False)
-
-    if config.index_2d:
-        mask_2d = pool_3d_label_to_2d(mask, vlmap.grid_pos, config.params.gs)
-        rgb_2d = pool_3d_rgb_to_2d(vlmap.grid_rgb, vlmap.grid_pos, config.params.gs)
-        visualize_masked_map_2d(rgb_2d, mask_2d)
-        heatmap = get_heatmap_from_mask_2d(mask_2d, cell_size=config.params.cs, decay_rate=config.decay_rate)
-        visualize_heatmap_2d(rgb_2d, heatmap)
-    else:
-        visualize_masked_map_3d(vlmap.grid_pos, mask, vlmap.grid_rgb)
-        heatmap = get_heatmap_from_mask_3d(
-            vlmap.grid_pos, mask, cell_size=config.params.cs, decay_rate=config.decay_rate
-        )
-        visualize_heatmap_3d(vlmap.grid_pos, heatmap, vlmap.grid_rgb)
+        if config.index_2d:
+            mask_2d = pool_3d_label_to_2d(mask, vlmap.grid_pos, config.params.gs)
+            rgb_2d = pool_3d_rgb_to_2d(vlmap.grid_rgb, vlmap.grid_pos, config.params.gs)
+            visualize_masked_map_2d(rgb_2d, mask_2d)
+            heatmap = get_heatmap_from_mask_2d(mask_2d, cell_size=config.params.cs, decay_rate=config.decay_rate)
+            visualize_heatmap_2d(rgb_2d, heatmap)
+        else:
+            visualize_masked_map_3d(vlmap.grid_pos, mask, vlmap.grid_rgb,0.8)
+            #heatmap = get_heatmap_from_mask_3d(
+            #    vlmap.grid_pos, mask, cell_size=config.params.cs, decay_rate=config.decay_rate
+            #)
+            #visualize_heatmap_3d(vlmap.grid_pos, heatmap, vlmap.grid_rgb)
+        
+        cat = input("What is your interested category in this scene?")
 
 
 if __name__ == "__main__":
