@@ -97,7 +97,7 @@ class VLMap(Map):
         self._setup_paths(data_dir)
         self.map_save_path = Path(data_dir)
         if not self.map_save_path.exists():
-            print("Loading VLMap failed because the file doesn't exist.")
+            print(f"Loading VLMap failed because the file doesn't exist: {self.map_save_path}")
             return False
         (
             self.mapped_iter_list,
