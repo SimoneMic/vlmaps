@@ -1,5 +1,5 @@
 gs: 1500
-cs: 0.05
+cs: 0.02
 camera_height: 1.5
 map_type: "vlmaps_lseg_3d" # "lseg", "gt", "clip", "clip_gradcam", "vlmaps_lseg_3d"
 forward_dist: 0.1 # 0.05

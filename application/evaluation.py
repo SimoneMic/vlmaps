@@ -187,13 +187,17 @@ def cluster_and_match_2d(point_cloud, gt_points, dbscan = DBSCAN(eps=5.0, min_sa
         if label >= 0:
             cluster_points = np.array(pos_2d[dbscan_labels == label])
             points_num = len(cluster_points)
-            if points_num == 0:
-                print(f"Found no matching points for label: {label}")
+            if points_num < 3:
+                print(f"[ERROR] Found {points_num=} points for label: {label}")
+                continue
+            # We compute the convex hull of the cluster
+            try:
+                chull = ConvexHull(points=cluster_points)
+                c_hulls.append(cluster_points[chull.vertices])
+            except Exception as ex:
+                print(f"[ERROR] {ex=} with points: {cluster_points=}")
                 continue
             centers.append(cluster_points.mean(axis=0))
-            # We compute the convex hull of the cluster
-            chull = ConvexHull(points=cluster_points)
-            c_hulls.append(cluster_points[chull.vertices])
     centers = np.array(centers)
     # We invert the arguments because we want to see the minimum distance from each GT to all the 2d centers
     clusters_distances = nearest_distances(gt_points_2d, centers)
@@ -296,7 +300,7 @@ def main(config: DictConfig):
                 continue
             ground_truths_list.append(ground_truths_values)
             mask = vlmap.index_map(cat, with_init_cat=False)
-            pointcloud_np = np.array(vlmap.grid_pos[mask], dtype=np.float32)
+            pointcloud_np = np.array(vlmap.grid_pos[mask], dtype=np.float64)
             if not len(pointcloud_np) == 0:
                 # Evaluation
                 # Get DBSCAN parameters based on object size categories
@@ -402,7 +406,7 @@ def main(config: DictConfig):
                     map_result_list.append(cat_acc_list)
 
                 else:   # Normal pose
-                    gt_values = np.array(ground_truths_values, dtype=np.float32)
+                    gt_values = np.array(ground_truths_values, dtype=np.float64)
                     gt_values_2d = gt_values[:, :2]
                     nearest_dist = nearest_distances(gt_values_2d, pointcloud_np[:,:2])
                     nearest_dist_gt_to_pc = nearest_distances(pointcloud_np[:,:2], gt_values_2d)
