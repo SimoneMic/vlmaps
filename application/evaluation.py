@@ -15,6 +15,8 @@ from shapely.geometry import Point, Polygon
 import csv
 from datetime import datetime
 
+from vlmaps.utils.visualize_utils import visualize_masked_map_3d
+
 import sys
 import os
 
@@ -290,6 +292,8 @@ def main(config: DictConfig):
         if not vlmap.load_map(f"/home/user1/vlmaps_files/vlmaps_original/{map_name}.h5df"):
             print(f"Error while loading: {map_name}")
             continue
+        else:
+            print(f"Loaded map: {map_name}")
         
         map_result_list = [map_name]
         for cat, cat_n in zip(category_list, range(len(category_list))):
@@ -301,21 +305,37 @@ def main(config: DictConfig):
             ground_truths_list.append(ground_truths_values)
             mask = vlmap.index_map(cat, with_init_cat=False)
             pointcloud_np = np.array(vlmap.grid_pos[mask], dtype=np.float64)
+            # for debug
+            print(f"{cat=}")
+            #visualize_masked_map_3d(vlmap.grid_pos, mask, vlmap.grid_rgb,0.8)
             if not len(pointcloud_np) == 0:
                 # Evaluation
                 # Get DBSCAN parameters based on object size categories
                 size = maps[map_name]['categories'][category_list[cat_n]]['size']
-                match size:
-                    case 0:
-                        dbscan = DBSCAN(eps=2.0, min_samples=5)
-                    case 1:
-                        dbscan = DBSCAN(eps=3.0, min_samples=25)
-                    case 2:
-                        dbscan = DBSCAN(eps=5.0, min_samples=30)
-                    case 3:
-                        dbscan = DBSCAN(eps=5.0, min_samples=60)
-                    case _: #default
-                        dbscan = DBSCAN(eps=5.0, min_samples=20)
+                if "objDet" in map_name:
+                    match size:
+                        case 0:
+                            dbscan = DBSCAN(eps=2.0, min_samples=10)
+                        case 1:
+                            dbscan = DBSCAN(eps=3.5, min_samples=40)
+                        case 2:
+                            dbscan = DBSCAN(eps=5.0, min_samples=80)
+                        case 3:
+                            dbscan = DBSCAN(eps=10.0, min_samples=300)
+                        case _: #default
+                            dbscan = DBSCAN(eps=5.0, min_samples=80)
+                else:
+                    match size:
+                        case 0:
+                            dbscan = DBSCAN(eps=2.0, min_samples=5)
+                        case 1:
+                            dbscan = DBSCAN(eps=3.0, min_samples=25)
+                        case 2:
+                            dbscan = DBSCAN(eps=5.0, min_samples=30)
+                        case 3:
+                            dbscan = DBSCAN(eps=5.0, min_samples=60)
+                        case _: #default
+                            dbscan = DBSCAN(eps=5.0, min_samples=20)
                 # Check if we have a single pose GT or polygons:
                 if type(ground_truths_values[0][0]) != float:
                     # We have a polygon list
