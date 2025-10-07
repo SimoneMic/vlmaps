@@ -22,13 +22,11 @@ from vlmaps.utils.visualize_utils import (
     config_name="map_indexing_cfg.yaml",
 )
 def main(config: DictConfig) -> None:
-    #data_dir = Path(config.data_paths.vlmaps_data_dir) / "vlmaps_dataset"
-    #data_dirs = sorted([x for x in data_dir.iterdir() if x.is_dir()])
     vlmap = VLMap(config.map_config, data_dir="/home/user1/vlmaps/vlmaps.h5df")
-    vlmap.load_map("/home/user1/vlmaps/vlmaps.h5df")
-    visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb, 1.0)
+    vlmap.load_map("/home/user1/vlmaps_files/vlmaps_original/floor0_objDet0_take4_original_vlmap.h5df")
+    visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb)
     print("Type: 'quit' to exit ")
-    cat = input("What is your interested category in this scene?")
+    cat = input("What are you interested in this scene?")
     # cat = "chair"
     while cat !="quit":
         vlmap._init_clip()
