@@ -175,10 +175,13 @@ def cluster_points(point_cloud, dbscan = DBSCAN(eps=5.0, min_samples=80)):
             if points_num == 0:
                 print(f"Found no matching points for label: {label}")
                 continue
-            centers.append(cluster_points.mean(axis=0))
             # We compute the convex hull of the cluster
-            chull = ConvexHull(points=cluster_points)
-            c_hulls.append(cluster_points[chull.vertices])
+            try:
+                chull = ConvexHull(points=cluster_points)
+                c_hulls.append(cluster_points[chull.vertices])
+                centers.append(cluster_points.mean(axis=0))
+            except Exception as ex:
+                print(f"Exception occurred: {ex=}\nSkipping block")
     centers = np.array(centers)
     return centers, c_hulls
 
@@ -463,7 +466,7 @@ def main(config: DictConfig):
                     #cluster_distancies, clusters_centres, acc, gt_acc, false_pos_accuracy = cluster_and_match_2d(pointcloud_np, gt_values, dbscan, unique_only=True)
                     #print(f"UNIQUE ONLY For {cat} closest distances: {cluster_distancies}, of cluster centres: {clusters_centres} to GT: {gt_values_2d} \nScatter ACCURACY: {acc} \nGT ACCURACY: {gt_acc}  FalsePos Acc: {false_pos_accuracy}")
             else:
-                cat_acc_list = [cat, -1.0, 0.0, 0.0, -1.0]
+                cat_acc_list = [cat, 0.0, 0.0, 0.0, -1.0]
                 map_result_list.append(cat_acc_list)
                 print(f"For {cat} no pointcloud found: {cat_acc_list=}")
 

@@ -23,7 +23,7 @@ from vlmaps.utils.visualize_utils import (
 )
 def main(config: DictConfig) -> None:
     vlmap = VLMap(config.map_config, data_dir="/home/user1/vlmaps/vlmaps.h5df")
-    vlmap.load_map("/home/user1/vlmaps_files/vlmaps_original/floor0_objDet0_take4_original_vlmap.h5df")
+    vlmap.load_map("/home/user1/vlmaps_files/vlmaps_original/floor0_objDet02_take4_original_vlmap.h5df")
     visualize_rgb_map_3d(vlmap.grid_pos, vlmap.grid_rgb)
     print("Type: 'quit' to exit ")
     cat = input("What are you interested in this scene?")
